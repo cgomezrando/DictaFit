@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "1028761004087",
+    "project_id": "dictafit-gym-y-dieta-por-voz",
+    "storage_bucket": "dictafit-gym-y-dieta-por-voz.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:1028761004087:android:bd18e3c7e457558a5c77b2",
+        "android_client_info": {
+          "package_name": "com.cgr.dictafitgymydietaporvoz"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDhAkN8v5sIabgAoAAScxes4fnfOOlHJ2s"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

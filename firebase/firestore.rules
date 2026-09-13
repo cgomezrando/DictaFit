@@ -1,0 +1,78 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /users/{document} {
+      allow create: if true;
+      allow read: if true;
+      allow write: if false;
+      allow delete: if false;
+    }
+
+    match /users/{parent}/pesos/{document} {
+      allow create: if true;
+      allow read: if true;
+      allow write: if false;
+      allow delete: if false;
+    }
+
+    match /{path=**}/pesos/{document} {
+      allow read: if true;
+    }
+
+
+    match /users/{parent}/entrenos/{document} {
+      allow create: if true;
+      allow read: if true;
+      allow write: if false;
+      allow delete: if false;
+    }
+
+    match /{path=**}/entrenos/{document} {
+      allow read: if true;
+    }
+
+
+    match /users/{parent}/comidas/{document} {
+      allow create: if true;
+      allow read: if true;
+      allow write: if false;
+      allow delete: if false;
+    }
+
+    match /{path=**}/comidas/{document} {
+      allow read: if true;
+    }
+
+
+    match /users/{parent}/plantillasIntervalos/{document} {
+      allow create: if true;
+      allow read: if true;
+      allow write: if false;
+      allow delete: if false;
+    }
+
+    match /{path=**}/plantillasIntervalos/{document} {
+      allow read: if true;
+    }
+
+
+    match /users/{parent}/sesionesIntervalos/{document} {
+      allow create: if true;
+      allow read: if true;
+      allow write: if false;
+      allow delete: if false;
+    }
+
+    match /{path=**}/sesionesIntervalos/{document} {
+      allow read: if true;
+    }
+
+
+    match /ejercicios/{document} {
+      allow create: if true;
+      allow read: if true;
+      allow write: if false;
+      allow delete: if false;
+    }
+  }
+}
