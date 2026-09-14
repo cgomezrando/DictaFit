@@ -46,6 +46,10 @@ class _EjercicioEdit {
   String nombre;
   int inclinacionGrados;
   String cargaPor;
+
+  /// Solo relevante si cargaPor=='barra': 'total' (por defecto) o
+  /// 'por_lado' si el kg dictado son los discos de un lado.
+  String pesoBarraTipo;
   List<_SerieEdit> series;
   double e1rmKg;
   double ratioPeso;
@@ -57,6 +61,7 @@ class _EjercicioEdit {
     required this.nombre,
     this.inclinacionGrados = 0,
     this.cargaPor = '',
+    this.pesoBarraTipo = 'total',
     List<_SerieEdit>? series,
     this.e1rmKg = 0,
     this.ratioPeso = 0,
@@ -71,6 +76,7 @@ class _EjercicioEdit {
       nombre: (j['nombre'] ?? 'Ejercicio sin identificar').toString(),
       inclinacionGrados: (j['inclinacionGrados'] as num?)?.toInt() ?? 0,
       cargaPor: (j['cargaPor'] ?? '').toString(),
+      pesoBarraTipo: (j['pesoBarraTipo'] ?? 'total').toString(),
       series: ((j['series'] as List?) ?? [])
           .map((s) => _SerieEdit(
                 kg: (s['kg'] as num?)?.toDouble(),
@@ -91,6 +97,7 @@ class _EjercicioEdit {
         'nombre': nombre,
         'inclinacionGrados': inclinacionGrados,
         'cargaPor': cargaPor,
+        'pesoBarraTipo': pesoBarraTipo,
         'series': series.map((s) => {'kg': s.kg, 'reps': s.reps}).toList(),
         'e1rmKg': e1rmKg,
         'ratioPeso': ratioPeso,
@@ -103,6 +110,7 @@ class _EjercicioEdit {
         'nombre': nombre,
         'inclinacionGrados': inclinacionGrados,
         'cargaPor': cargaPor,
+        'pesoBarraTipo': pesoBarraTipo,
         'series': series.map((s) => {'kg': s.kg, 'reps': s.reps}).toList(),
         'e1rmKg': e1rmKg,
         'ratioPeso': ratioPeso,
@@ -129,16 +137,23 @@ class RegistroEntreno extends StatefulWidget {
     this.width,
     this.height,
     required this.onGuardado,
+    this.entrenoParaEditar,
   });
 
   final double? width;
   final double? height;
 
-  /// Se llama tras guardar el entreno. Antes de llamarlo, el widget guarda la
-  /// referencia del documento creado en FFAppState().entrenoGuardadoRef, para
-  /// que la acción de FlutterFlow pueda navegar a WorkoutAnalysis pasándola
-  /// como Page Parameter.
+  /// Se llama tras guardar (solo cuando NO se está editando un entreno
+  /// concreto — ver [entrenoParaEditar]). Antes de llamarlo, el widget
+  /// guarda la referencia del documento en FFAppState().entrenoGuardadoRef,
+  /// para que la acción de FlutterFlow pueda navegar a WorkoutAnalysis
+  /// pasándola como Page Parameter.
   final Future Function() onGuardado;
+
+  /// Si se indica, el widget abre directamente este entreno para editarlo
+  /// (desde Historial), en vez de buscar o crear el entreno abierto del
+  /// día. Al guardar, solo se actualizan sus datos y se vuelve atrás.
+  final DocumentReference? entrenoParaEditar;
 
   @override
   State<RegistroEntreno> createState() => _RegistroEntrenoState();
@@ -158,6 +173,11 @@ class _RegistroEntrenoState extends State<RegistroEntreno> {
 
   double _pesoCorporalKg = 0;
   String _sexo = 'hombre';
+  double _pesoBarraKg = 20.0;
+
+  /// True cuando el widget se abrió para editar un entreno ya guardado
+  /// (desde Historial), en vez de continuar el entreno abierto del día.
+  bool get _modoEdicion => widget.entrenoParaEditar != null;
 
   List<_ItemCatalogo> _catalogo = [];
 
@@ -211,6 +231,7 @@ class _RegistroEntrenoState extends State<RegistroEntreno> {
       final datos = doc.data() ?? {};
       final peso = (datos['pesoKg'] as num?)?.toDouble() ?? 0;
       final sexo = (datos['sexo'] ?? 'hombre').toString();
+      final pesoBarra = (datos['pesoBarraKg'] as num?)?.toDouble() ?? 20.0;
 
       if (peso <= 0) {
         setState(() {
@@ -223,28 +244,46 @@ class _RegistroEntrenoState extends State<RegistroEntreno> {
 
       _pesoCorporalKg = peso;
       _sexo = sexo == 'mujer' ? 'mujer' : 'hombre';
-
-      // Un usuario solo tiene, como mucho, un entreno abierto a la vez: si
-      // existe, seguimos añadiendo a él en vez de empezar uno nuevo. Se
-      // busca solo por igualdad (sin orderBy) para no necesitar un índice
-      // compuesto en Firestore.
-      final abiertos = await userRef
-          .collection('entrenos')
-          .where('estado', isEqualTo: 'abierto')
-          .limit(1)
-          .get();
+      _pesoBarraKg = pesoBarra > 0 ? pesoBarra : 20.0;
 
       _Estado estadoInicial = _Estado.inicio;
-      if (abiertos.docs.isNotEmpty) {
-        final entrenoDoc = abiertos.docs.first;
-        _entrenoAbiertoRef = entrenoDoc.reference;
-        final datosEntreno = entrenoDoc.data();
+
+      if (_modoEdicion) {
+        // Editar un entreno concreto ya guardado (desde Historial): se
+        // carga tal cual esté, sea 'abierto' o 'completo', y al guardar
+        // solo se actualiza, sin tocar el estado del entreno abierto.
+        final entrenoDoc = await widget.entrenoParaEditar!.get();
+        final datosEntreno = entrenoDoc.data() as Map<String, dynamic>? ?? {};
+        _entrenoAbiertoRef = widget.entrenoParaEditar;
         _transcripcion = (datosEntreno['transcripcion'] ?? '').toString();
         _ejercicios = ((datosEntreno['ejercicios'] as List?) ?? [])
             .whereType<Map>()
             .map((e) => _EjercicioEdit.desdeJson(Map<String, dynamic>.from(e)))
             .toList();
         estadoInicial = _Estado.confirmacion;
+      } else {
+        // Un usuario solo tiene, como mucho, un entreno abierto a la vez: si
+        // existe, seguimos añadiendo a él en vez de empezar uno nuevo. Se
+        // busca solo por igualdad (sin orderBy) para no necesitar un índice
+        // compuesto en Firestore.
+        final abiertos = await userRef
+            .collection('entrenos')
+            .where('estado', isEqualTo: 'abierto')
+            .limit(1)
+            .get();
+
+        if (abiertos.docs.isNotEmpty) {
+          final entrenoDoc = abiertos.docs.first;
+          _entrenoAbiertoRef = entrenoDoc.reference;
+          final datosEntreno = entrenoDoc.data();
+          _transcripcion = (datosEntreno['transcripcion'] ?? '').toString();
+          _ejercicios = ((datosEntreno['ejercicios'] as List?) ?? [])
+              .whereType<Map>()
+              .map(
+                  (e) => _EjercicioEdit.desdeJson(Map<String, dynamic>.from(e)))
+              .toList();
+          estadoInicial = _Estado.confirmacion;
+        }
       }
 
       unawaited(_inicializarVoz());
@@ -475,6 +514,7 @@ class _RegistroEntrenoState extends State<RegistroEntreno> {
         'texto': texto,
         'pesoCorporalKg': _pesoCorporalKg,
         'sexo': _sexo,
+        'pesoBarraKg': _pesoBarraKg,
       });
       final ejerciciosNuevos = ((json['ejercicios'] as List?) ?? [])
           .map((e) =>
@@ -486,7 +526,26 @@ class _RegistroEntrenoState extends State<RegistroEntreno> {
 
       setState(() {
         if (anadiendo) {
-          _ejercicios = [..._ejercicios, ...ejerciciosNuevos];
+          // Si un ejercicio nuevo coincide con uno ya en la lista (mismo
+          // ejercicio identificado del catálogo), se juntan sus series en
+          // vez de crear una tarjeta duplicada. Los "desconocido" nunca se
+          // fusionan entre sí, porque podrían ser cosas distintas.
+          for (final nuevo in ejerciciosNuevos) {
+            _EjercicioEdit? existente;
+            if (nuevo.ejercicioId != 'desconocido') {
+              for (final e in _ejercicios) {
+                if (e.ejercicioId == nuevo.ejercicioId) {
+                  existente = e;
+                  break;
+                }
+              }
+            }
+            if (existente != null) {
+              existente.series.addAll(nuevo.series);
+            } else {
+              _ejercicios.add(nuevo);
+            }
+          }
           _transcripcion = '$_transcripcion  ·  $transcripcionNueva';
         } else {
           _ejercicios = ejerciciosNuevos;
@@ -506,12 +565,68 @@ class _RegistroEntrenoState extends State<RegistroEntreno> {
     }
   }
 
+  /// Guarda cambios en un entreno concreto que se está editando (desde
+  /// Historial), sin tocar su estado ('abierto'/'completo') ni navegar a
+  /// WorkoutAnalysis: solo actualiza y vuelve a la pantalla anterior.
+  Future<void> _guardarEdicion() async {
+    setState(() => _guardandoAhora = true);
+    try {
+      final json = await _llamarBackend('/v1/entreno/calcular', {
+        'pesoCorporalKg': _pesoCorporalKg,
+        'sexo': _sexo,
+        'pesoBarraKg': _pesoBarraKg,
+        'ejercicios': _ejercicios.map((e) => e.aPeticion()).toList(),
+      });
+      final recalculados = ((json['ejercicios'] as List?) ?? [])
+          .map((e) =>
+              _EjercicioEdit.desdeJson(Map<String, dynamic>.from(e as Map)))
+          .toList();
+      final avisos =
+          ((json['avisos'] as List?) ?? []).map((a) => a.toString()).toList();
+
+      if (!mounted) return;
+      setState(() {
+        _ejercicios = recalculados;
+        _avisos = avisos;
+      });
+
+      if (avisos.isNotEmpty) {
+        final continuar = await _confirmarPeseALosAvisos(avisos);
+        if (continuar != true) {
+          if (mounted) setState(() => _guardandoAhora = false);
+          return;
+        }
+      }
+
+      await widget.entrenoParaEditar!.set({
+        'transcripcion': _transcripcion,
+        'pesoCorporalKg': _pesoCorporalKg,
+        'ejercicios': recalculados.map((e) => e.aFirestore()).toList(),
+        'ultimaActualizacion': FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true));
+
+      if (!mounted) return;
+      context.safePop();
+    } on _ErrorApi catch (e) {
+      if (mounted) {
+        setState(() => _guardandoAhora = false);
+        _mostrarMensaje(e.mensaje);
+      }
+    } catch (_) {
+      if (mounted) {
+        setState(() => _guardandoAhora = false);
+        _mostrarMensaje('No se ha podido guardar. Inténtalo de nuevo.');
+      }
+    }
+  }
+
   Future<void> _guardar({required bool completar}) async {
     setState(() => _guardandoAhora = true);
     try {
       final json = await _llamarBackend('/v1/entreno/calcular', {
         'pesoCorporalKg': _pesoCorporalKg,
         'sexo': _sexo,
+        'pesoBarraKg': _pesoBarraKg,
         'ejercicios': _ejercicios.map((e) => e.aPeticion()).toList(),
       });
       final recalculados = ((json['ejercicios'] as List?) ?? [])
@@ -1076,6 +1191,30 @@ class _RegistroEntrenoState extends State<RegistroEntreno> {
     );
   }
 
+  Widget _segmentoBarra(int indice, String valor, String texto) {
+    final tema = FlutterFlowTheme.of(context);
+    final activo = _ejercicios[indice].pesoBarraTipo == valor;
+    return GestureDetector(
+      onTap: () => setState(() => _ejercicios[indice].pesoBarraTipo = valor),
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 150),
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+        decoration: BoxDecoration(
+          color: activo ? _tinte(tema.primary, 0.2) : Colors.transparent,
+          borderRadius: BorderRadius.circular(999),
+          border: Border.all(color: activo ? tema.primary : tema.alternate),
+        ),
+        child: Text(
+          texto,
+          style: tema.bodySmall.copyWith(
+            color: activo ? tema.primaryText : tema.secondaryText,
+            fontWeight: activo ? FontWeight.w600 : FontWeight.w500,
+          ),
+        ),
+      ),
+    );
+  }
+
   Widget _filaSerie(int indiceEjercicio, int indiceSerie, _SerieEdit serie) {
     final tema = FlutterFlowTheme.of(context);
     return Padding(
@@ -1197,6 +1336,29 @@ class _RegistroEntrenoState extends State<RegistroEntreno> {
                   'Sin identificar. Toca el nombre para elegir el ejercicio correcto.',
                   style: tema.bodySmall.copyWith(color: tema.warning)),
             ),
+          if (ejercicio.cargaPor == 'maquina')
+            Padding(
+              padding: const EdgeInsets.only(top: 4, bottom: 6),
+              child: Text(
+                'Incluye el peso total: los discos que has puesto más el peso propio de la máquina.',
+                style: tema.bodySmall.copyWith(color: tema.secondaryText),
+              ),
+            ),
+          if (ejercicio.cargaPor == 'barra')
+            Padding(
+              padding: const EdgeInsets.only(top: 2, bottom: 8),
+              child: Row(
+                children: [
+                  Text('Peso dictado:',
+                      style:
+                          tema.bodySmall.copyWith(color: tema.secondaryText)),
+                  const SizedBox(width: 8),
+                  _segmentoBarra(indice, 'total', 'Total'),
+                  const SizedBox(width: 6),
+                  _segmentoBarra(indice, 'por_lado', 'Por lado'),
+                ],
+              ),
+            ),
           const SizedBox(height: 10),
           ...ejercicio.series
               .asMap()
@@ -1299,36 +1461,43 @@ class _RegistroEntrenoState extends State<RegistroEntreno> {
         ),
         Padding(
           padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              _botonPrincipal(
-                _guardandoAhora ? 'Guardando...' : 'Guardar',
-                (_guardandoAhora || _ejercicios.isEmpty)
-                    ? null
-                    : () => _guardar(completar: false),
-                relleno: false,
-              ),
-              const SizedBox(height: 10),
-              ElevatedButton.icon(
-                onPressed: (_guardandoAhora || _ejercicios.isEmpty)
-                    ? null
-                    : () => _guardar(completar: true),
-                icon:
-                    const Icon(Icons.check_circle_rounded, color: Colors.white),
-                label: Text(
-                    _guardandoAhora ? 'Guardando...' : 'Sesión completa',
-                    style: const TextStyle(fontWeight: FontWeight.w700)),
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: tema.secondary,
-                  disabledBackgroundColor: _tinte(tema.secondary, 0.4),
-                  foregroundColor: Colors.white,
-                  shape: const StadiumBorder(),
-                  padding: const EdgeInsets.symmetric(vertical: 15),
+          child: _modoEdicion
+              ? _botonPrincipal(
+                  _guardandoAhora ? 'Guardando...' : 'Guardar cambios',
+                  (_guardandoAhora || _ejercicios.isEmpty)
+                      ? null
+                      : _guardarEdicion,
+                )
+              : Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    _botonPrincipal(
+                      _guardandoAhora ? 'Guardando...' : 'Guardar',
+                      (_guardandoAhora || _ejercicios.isEmpty)
+                          ? null
+                          : () => _guardar(completar: false),
+                      relleno: false,
+                    ),
+                    const SizedBox(height: 10),
+                    ElevatedButton.icon(
+                      onPressed: (_guardandoAhora || _ejercicios.isEmpty)
+                          ? null
+                          : () => _guardar(completar: true),
+                      icon: const Icon(Icons.check_circle_rounded,
+                          color: Colors.white),
+                      label: Text(
+                          _guardandoAhora ? 'Guardando...' : 'Sesión completa',
+                          style: const TextStyle(fontWeight: FontWeight.w700)),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: tema.secondary,
+                        disabledBackgroundColor: _tinte(tema.secondary, 0.4),
+                        foregroundColor: Colors.white,
+                        shape: const StadiumBorder(),
+                        padding: const EdgeInsets.symmetric(vertical: 15),
+                      ),
+                    ),
+                  ],
                 ),
-              ),
-            ],
-          ),
         ),
       ],
     );
@@ -1357,9 +1526,11 @@ class _RegistroEntrenoState extends State<RegistroEntreno> {
         cuerpo = _vistaProcesando();
         break;
       case _Estado.confirmacion:
-        titulo = _entrenoAbiertoRef != null
-            ? 'Tu entreno de hoy'
-            : 'Revisa tu entreno';
+        titulo = _modoEdicion
+            ? 'Editar entreno'
+            : (_entrenoAbiertoRef != null
+                ? 'Tu entreno de hoy'
+                : 'Revisa tu entreno');
         cuerpo = _vistaConfirmacion();
         break;
       case _Estado.guardando:

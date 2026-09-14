@@ -123,6 +123,11 @@ GoRouter createRouter(AppStateNotifier appStateNotifier) => GoRouter(
           name: ProfileWidget.routeName,
           path: ProfileWidget.routePath,
           builder: (context, params) => ProfileWidget(),
+        ),
+        FFRoute(
+          name: HistoryWidget.routeName,
+          path: HistoryWidget.routePath,
+          builder: (context, params) => HistoryWidget(),
         )
       ].map((r) => r.toRoute(appStateNotifier)).toList(),
     );

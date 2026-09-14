@@ -295,12 +295,17 @@ class _MusculosEntrenamientoState extends State<MusculosEntrenamiento> {
       if (musculos is! List) continue;
       final series = ejercicio['series'];
       final numSeries = series is List && series.isNotEmpty ? series.length : 1;
+      // Cuánto pesabas de verdad en este ejercicio (1RM ÷ tu peso corporal),
+      // para que levantar mucho cuente más que levantar poco con las mismas
+      // series. Sin datos de peso, cuenta igual que antes (factor 1).
+      final ratio = (ejercicio['ratioPeso'] as num?)?.toDouble() ?? 0;
+      final factorCarga = 1 + ratio;
       for (final m in musculos) {
         if (m is! Map) continue;
         final id = (m['musculo'] ?? '').toString().trim().toLowerCase();
         if (id.isEmpty) continue;
         final peso = (m['peso'] as num?)?.toDouble() ?? 0.5;
-        bruto[id] = (bruto[id] ?? 0) + peso * numSeries;
+        bruto[id] = (bruto[id] ?? 0) + peso * numSeries * factorCarga;
       }
     }
     if (bruto.isEmpty) return {};

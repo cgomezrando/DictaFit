@@ -6,3 +6,4 @@ export '/pages/workout_analysis/workout_analysis_widget.dart'
 export '/pages/record_workout/record_workout_widget.dart'
     show RecordWorkoutWidget;
 export '/pages/profile/profile_widget.dart' show ProfileWidget;
+export '/pages/history/history_widget.dart' show HistoryWidget;

@@ -3,32 +3,31 @@ import '/flutter_flow/flutter_flow_util.dart';
 import '/flutter_flow/flutter_flow_widgets.dart';
 import '/custom_code/widgets/index.dart' as custom_widgets;
 import '/index.dart';
-import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:provider/provider.dart';
-import 'record_workout_model.dart';
-export 'record_workout_model.dart';
+import 'history_model.dart';
+export 'history_model.dart';
 
-class RecordWorkoutWidget extends StatefulWidget {
-  const RecordWorkoutWidget({super.key});
+class HistoryWidget extends StatefulWidget {
+  const HistoryWidget({super.key});
 
-  static String routeName = 'RecordWorkout';
-  static String routePath = '/recordWorkout';
+  static String routeName = 'History';
+  static String routePath = '/history';
 
   @override
-  State<RecordWorkoutWidget> createState() => _RecordWorkoutWidgetState();
+  State<HistoryWidget> createState() => _HistoryWidgetState();
 }
 
-class _RecordWorkoutWidgetState extends State<RecordWorkoutWidget> {
-  late RecordWorkoutModel _model;
+class _HistoryWidgetState extends State<HistoryWidget> {
+  late HistoryModel _model;
 
   final scaffoldKey = GlobalKey<ScaffoldState>();
 
   @override
   void initState() {
     super.initState();
-    _model = createModel(context, () => RecordWorkoutModel());
+    _model = createModel(context, () => HistoryModel());
   }
 
   @override
@@ -53,14 +52,10 @@ class _RecordWorkoutWidgetState extends State<RecordWorkoutWidget> {
         body: Container(
           width: double.infinity,
           height: double.infinity,
-          child: custom_widgets.RegistroEntreno(
+          child: custom_widgets.HistorialEntrenos(
             width: double.infinity,
             height: double.infinity,
-            entrenoParaEditar: _model.entrenoParaEditar,
-            onGuardado: () async {
-              if (Navigator.of(context).canPop()) {
-                context.pop();
-              }
+            onVerEntreno: () async {
               context.pushNamed(
                 WorkoutAnalysisWidget.routeName,
                 queryParameters: {
@@ -70,6 +65,9 @@ class _RecordWorkoutWidgetState extends State<RecordWorkoutWidget> {
                   ),
                 }.withoutNulls,
               );
+            },
+            onEditarEntreno: () async {
+              context.pushNamed(RecordWorkoutWidget.routeName);
             },
           ),
         ),

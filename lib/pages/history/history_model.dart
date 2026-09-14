@@ -3,17 +3,12 @@ import '/flutter_flow/flutter_flow_util.dart';
 import '/flutter_flow/flutter_flow_widgets.dart';
 import '/custom_code/widgets/index.dart' as custom_widgets;
 import '/index.dart';
-import 'record_workout_widget.dart' show RecordWorkoutWidget;
-import 'package:cloud_firestore/cloud_firestore.dart';
+import 'history_widget.dart' show HistoryWidget;
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:provider/provider.dart';
 
-class RecordWorkoutModel extends FlutterFlowModel<RecordWorkoutWidget> {
-  ///  Local state fields for this page.
-
-  DocumentReference? entrenoParaEditar;
-
+class HistoryModel extends FlutterFlowModel<HistoryWidget> {
   @override
   void initState(BuildContext context) {}
 
