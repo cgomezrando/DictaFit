@@ -10,6 +10,8 @@ import 'package:flutter/material.dart';
 // Begin custom widget code
 // DO NOT REMOVE OR MODIFY THE CODE ABOVE!
 
+import 'dart:math' as math;
+
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter_svg/flutter_svg.dart';
@@ -126,6 +128,124 @@ class _MusculosEntrenamientoState extends State<MusculosEntrenamiento> {
   Color get _colorPrincipal => FlutterFlowTheme.of(context).primary;
   Color get _colorSecundario => const Color(0xFFC4B5FD);
 
+  String _numeroCorto(double v) {
+    return v == v.roundToDouble() ? v.toInt().toString() : v.toStringAsFixed(1);
+  }
+
+  String _textoSerie(Map<String, dynamic> serie, String cargaPor) {
+    final kg = (serie['kg'] as num?)?.toDouble();
+    final reps = (serie['reps'] as num?)?.toInt();
+    String pesoTexto;
+    if (kg == null) {
+      pesoTexto = '—';
+    } else if (cargaPor == 'corporal') {
+      pesoTexto =
+          kg == 0 ? 'peso corporal' : 'peso corporal +${_numeroCorto(kg)} kg';
+    } else if (cargaPor == 'mancuerna') {
+      pesoTexto = '${_numeroCorto(kg)} kg × 2';
+    } else {
+      pesoTexto = '${_numeroCorto(kg)} kg';
+    }
+    return '$pesoTexto × ${reps ?? '—'}';
+  }
+
+  Widget _filaEjercicio(Map<String, dynamic> ejercicio, {bool ultima = false}) {
+    final tema = FlutterFlowTheme.of(context);
+    final nombre = (ejercicio['nombre'] ?? 'Ejercicio').toString();
+    final nivel = (ejercicio['nivel'] ?? '').toString();
+    final cargaPor = (ejercicio['cargaPor'] ?? '').toString();
+    final e1rm = (ejercicio['e1rmKg'] as num?)?.toDouble() ?? 0;
+    final ratio = (ejercicio['ratioPeso'] as num?)?.toDouble() ?? 0;
+    final series = ((ejercicio['series'] as List?) ?? [])
+        .whereType<Map>()
+        .map((s) => Map<String, dynamic>.from(s))
+        .toList();
+
+    return Container(
+      padding: EdgeInsets.only(bottom: ultima ? 0 : 14),
+      margin: EdgeInsets.only(bottom: ultima ? 0 : 14),
+      decoration: ultima
+          ? null
+          : BoxDecoration(
+              border: Border(bottom: BorderSide(color: tema.alternate))),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Expanded(
+                child: Text(
+                  nombre,
+                  style: tema.bodyMedium.copyWith(
+                      color: tema.primaryText, fontWeight: FontWeight.w600),
+                ),
+              ),
+              if (nivel.isNotEmpty)
+                Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                  decoration: BoxDecoration(
+                    color: _tinte(_colorPrincipal, 0.18),
+                    borderRadius: BorderRadius.circular(999),
+                  ),
+                  child: Text(
+                    nivel[0].toUpperCase() + nivel.substring(1),
+                    style: tema.bodySmall.copyWith(
+                        color: _colorPrincipal, fontWeight: FontWeight.w600),
+                  ),
+                ),
+            ],
+          ),
+          if (series.isNotEmpty) ...[
+            const SizedBox(height: 4),
+            Text(
+              series.map((s) => _textoSerie(s, cargaPor)).join('  ·  '),
+              style: tema.bodySmall.copyWith(color: tema.secondaryText),
+            ),
+          ],
+          if (e1rm > 0) ...[
+            const SizedBox(height: 2),
+            Text(
+              '1RM estimado: ${_numeroCorto(e1rm)} kg'
+              '${ratio > 0 ? '  ·  ${ratio.toStringAsFixed(2)}× tu peso' : ''}',
+              style: tema.bodySmall.copyWith(color: tema.secondaryText),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _tarjetaEjercicios(Map<String, dynamic> entreno) {
+    final tema = FlutterFlowTheme.of(context);
+    final ejercicios = ((entreno['ejercicios'] as List?) ?? [])
+        .whereType<Map>()
+        .map((e) => Map<String, dynamic>.from(e))
+        .toList();
+    if (ejercicios.isEmpty) return const SizedBox.shrink();
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: 14),
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: tema.secondaryBackground,
+        borderRadius: BorderRadius.circular(22),
+        border: Border.all(color: tema.alternate),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text('Ejercicios',
+              style: tema.titleSmall.copyWith(
+                  color: tema.primaryText, fontWeight: FontWeight.w600)),
+          const SizedBox(height: 12),
+          for (var i = 0; i < ejercicios.length; i++)
+            _filaEjercicio(ejercicios[i], ultima: i == ejercicios.length - 1),
+        ],
+      ),
+    );
+  }
+
   String _hex(Color color) {
     return '#${(color.value & 0xFFFFFF).toRadixString(16).padLeft(6, '0')}';
   }
@@ -161,15 +281,52 @@ class _MusculosEntrenamientoState extends State<MusculosEntrenamiento> {
     return niveles;
   }
 
-  String _construirSvg(Map<String, int> niveles) {
+  /// Intensidad relativa (0 a 1) de cada músculo dentro de este entreno,
+  /// para el mapa de calor. Combina cuánto interviene el músculo en cada
+  /// ejercicio (peso del catálogo) con el volumen (número de series), y
+  /// normaliza contra el músculo más trabajado del propio entreno.
+  Map<String, double> _intensidadesMusculos(Map<String, dynamic> entreno) {
+    final bruto = <String, double>{};
+    final ejercicios = entreno['ejercicios'];
+    if (ejercicios is! List) return {};
+    for (final ejercicio in ejercicios) {
+      if (ejercicio is! Map) continue;
+      final musculos = ejercicio['musculos'];
+      if (musculos is! List) continue;
+      final series = ejercicio['series'];
+      final numSeries = series is List && series.isNotEmpty ? series.length : 1;
+      for (final m in musculos) {
+        if (m is! Map) continue;
+        final id = (m['musculo'] ?? '').toString().trim().toLowerCase();
+        if (id.isEmpty) continue;
+        final peso = (m['peso'] as num?)?.toDouble() ?? 0.5;
+        bruto[id] = (bruto[id] ?? 0) + peso * numSeries;
+      }
+    }
+    if (bruto.isEmpty) return {};
+    final maximo = bruto.values.reduce((a, b) => a > b ? a : b);
+    if (maximo <= 0) return {};
+    return bruto
+        .map((id, valor) => MapEntry(id, (valor / maximo).clamp(0.0, 1.0)));
+  }
+
+  /// Degradado de rojos: apenas trabajado → un rosa muy pálido cercano al
+  /// fondo; muy trabajado → rojo intenso. Se aplica una curva (raíz
+  /// cuadrada) para que las diferencias se noten también en la parte baja.
+  Color _colorCalor(double intensidad) {
+    final tema = FlutterFlowTheme.of(context);
+    final t = math.sqrt(intensidad.clamp(0.0, 1.0));
+    final frio = Color.lerp(tema.alternate, tema.error, 0.18)!;
+    return Color.lerp(frio, tema.error, t)!;
+  }
+
+  String _construirSvg(Map<String, double> intensidades) {
     final tema = FlutterFlowTheme.of(context);
     final frontal = _vista == 'frontal';
     final silueta = frontal ? _siluetaFrontal : _siluetaDorsal;
     final regiones = frontal ? _regionesFrontal : _regionesDorsal;
 
     final colorLineas = _hex(tema.primaryBackground);
-    final colorPrincipal = _hex(_colorPrincipal);
-    final colorSecundario = _hex(_colorSecundario);
 
     final svg = StringBuffer()
       ..write('<svg xmlns="http://www.w3.org/2000/svg" viewBox="$_viewBox">')
@@ -181,15 +338,12 @@ class _MusculosEntrenamientoState extends State<MusculosEntrenamiento> {
       if (id == '_base') {
         relleno = _colorBase;
       } else {
-        final nivel = niveles[id] ?? 0;
-        if (nivel == _nivelPrincipal) {
-          relleno = colorPrincipal;
-          opacidad = '0.95';
-        } else if (nivel == _nivelSecundario) {
-          relleno = colorSecundario;
-          opacidad = '0.75';
-        } else {
+        final intensidad = intensidades[id] ?? 0;
+        if (intensidad <= 0) {
           relleno = _colorReposo;
+        } else {
+          relleno = _hex(_colorCalor(intensidad));
+          opacidad = (0.55 + 0.4 * intensidad).toStringAsFixed(2);
         }
       }
       svg.write('<path d="$d" fill="$relleno" fill-opacity="$opacidad" '
@@ -284,29 +438,25 @@ class _MusculosEntrenamientoState extends State<MusculosEntrenamiento> {
 
   Widget _leyenda() {
     final tema = FlutterFlowTheme.of(context);
-
-    Widget item(Color color, String texto) {
-      return Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Container(
-            width: 12,
-            height: 12,
-            decoration: BoxDecoration(color: color, shape: BoxShape.circle),
-          ),
-          const SizedBox(width: 6),
-          Text(texto,
-              style: tema.bodySmall.copyWith(color: tema.secondaryText)),
-        ],
-      );
-    }
-
     return Row(
-      mainAxisAlignment: MainAxisAlignment.center,
       children: [
-        item(_colorPrincipal, 'Trabajo principal'),
-        const SizedBox(width: 18),
-        item(_colorSecundario, 'Trabajo secundario'),
+        Text('Menos',
+            style: tema.bodySmall.copyWith(color: tema.secondaryText)),
+        const SizedBox(width: 8),
+        Expanded(
+          child: Container(
+            height: 8,
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(999),
+              gradient: LinearGradient(
+                colors: List.generate(6, (i) => _colorCalor(i / 5)),
+              ),
+            ),
+          ),
+        ),
+        const SizedBox(width: 8),
+        Text('Más trabajado',
+            style: tema.bodySmall.copyWith(color: tema.secondaryText)),
       ],
     );
   }
@@ -349,6 +499,7 @@ class _MusculosEntrenamientoState extends State<MusculosEntrenamiento> {
   Widget _contenido(Map<String, dynamic> entreno) {
     final tema = FlutterFlowTheme.of(context);
     final niveles = _nivelesMusculos(entreno);
+    final intensidades = _intensidadesMusculos(entreno);
     final principales = niveles.entries
         .where((e) => e.value == _nivelPrincipal)
         .map((e) => e.key)
@@ -363,6 +514,7 @@ class _MusculosEntrenamientoState extends State<MusculosEntrenamiento> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
+          _tarjetaEjercicios(entreno),
           _selectorVista(),
           const SizedBox(height: 14),
           Container(
@@ -377,7 +529,7 @@ class _MusculosEntrenamientoState extends State<MusculosEntrenamiento> {
               duration: const Duration(milliseconds: 250),
               child: Builder(
                 builder: (context) {
-                  final svg = _construirSvg(niveles);
+                  final svg = _construirSvg(intensidades);
                   return SvgPicture.string(
                     svg,
                     key: ValueKey(svg.hashCode),

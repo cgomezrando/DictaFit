@@ -341,7 +341,7 @@ class _RegistroEntrenoState extends State<RegistroEntreno> {
       },
       localeId: _localeVoz,
       listenFor: const Duration(minutes: 4),
-      pauseFor: const Duration(seconds: 6),
+      pauseFor: const Duration(seconds: 45),
       partialResults: true,
       cancelOnError: true,
     );
