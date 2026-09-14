@@ -10,10 +10,6 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:provider/provider.dart';
 
 class RecordWorkoutModel extends FlutterFlowModel<RecordWorkoutWidget> {
-  ///  Local state fields for this page.
-
-  DocumentReference? entrenoParaEditar;
-
   @override
   void initState(BuildContext context) {}
 

@@ -117,7 +117,14 @@ GoRouter createRouter(AppStateNotifier appStateNotifier) => GoRouter(
         FFRoute(
           name: RecordWorkoutWidget.routeName,
           path: RecordWorkoutWidget.routePath,
-          builder: (context, params) => RecordWorkoutWidget(),
+          builder: (context, params) => RecordWorkoutWidget(
+            entrenoParaEditar: params.getParam(
+              'entrenoParaEditar',
+              ParamType.DocumentReference,
+              isList: false,
+              collectionNamePath: ['users', 'entrenos'],
+            ),
+          ),
         ),
         FFRoute(
           name: ProfileWidget.routeName,

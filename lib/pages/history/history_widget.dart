@@ -67,7 +67,15 @@ class _HistoryWidgetState extends State<HistoryWidget> {
               );
             },
             onEditarEntreno: () async {
-              context.pushNamed(RecordWorkoutWidget.routeName);
+              context.pushNamed(
+                RecordWorkoutWidget.routeName,
+                queryParameters: {
+                  'entrenoParaEditar': serializeParam(
+                    FFAppState().entrenoGuardadoRef,
+                    ParamType.DocumentReference,
+                  ),
+                }.withoutNulls,
+              );
             },
           ),
         ),

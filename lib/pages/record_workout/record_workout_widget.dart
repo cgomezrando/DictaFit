@@ -11,7 +11,12 @@ import 'record_workout_model.dart';
 export 'record_workout_model.dart';
 
 class RecordWorkoutWidget extends StatefulWidget {
-  const RecordWorkoutWidget({super.key});
+  const RecordWorkoutWidget({
+    super.key,
+    this.entrenoParaEditar,
+  });
+
+  final DocumentReference? entrenoParaEditar;
 
   static String routeName = 'RecordWorkout';
   static String routePath = '/recordWorkout';
@@ -56,7 +61,7 @@ class _RecordWorkoutWidgetState extends State<RecordWorkoutWidget> {
           child: custom_widgets.RegistroEntreno(
             width: double.infinity,
             height: double.infinity,
-            entrenoParaEditar: _model.entrenoParaEditar,
+            entrenoParaEditar: widget!.entrenoParaEditar,
             onGuardado: () async {
               if (Navigator.of(context).canPop()) {
                 context.pop();
