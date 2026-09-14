@@ -63,7 +63,9 @@ class _HomeDictaFitState extends State<HomeDictaFit> {
         .snapshots();
     _ultimoEntrenoStream = userRef
         .collection('entrenos')
-        .orderBy('fecha', descending: true)
+        .where('ultimaActualizacion', isGreaterThanOrEqualTo: inicioDia)
+        .where('ultimaActualizacion', isLessThan: finDia)
+        .orderBy('ultimaActualizacion', descending: true)
         .limit(1)
         .snapshots();
     _entrenosSemanaStream = userRef
@@ -956,8 +958,9 @@ class _HomeDictaFitState extends State<HomeDictaFit> {
           _filaEnfoque(
             icono: Icons.fitness_center_rounded,
             acento: tema.primary,
-            titulo: 'Fuerza (último entreno)',
-            valor: mejorRatio == null ? '—' : '${(mejorRatio * 100).round()}%',
+            titulo: 'Fuerza (hoy)',
+            valor:
+                mejorRatio == null ? '—' : '${mejorRatio.toStringAsFixed(2)}×',
             colorValor: tema.primaryText,
             extra: nivel,
           ),

@@ -173,6 +173,10 @@ class _RegistroEntrenoState extends State<RegistroEntreno> {
 
   String _transcripcion = '';
   List<_EjercicioEdit> _ejercicios = [];
+
+  /// Documento del entreno abierto (si ya existía uno al entrar, o el que
+  /// se crea al primer guardado). Null hasta que se guarda por primera vez.
+  DocumentReference? _entrenoAbiertoRef;
   List<String> _avisos = [];
   int? _notasRestantes;
 
@@ -202,8 +206,8 @@ class _RegistroEntrenoState extends State<RegistroEntreno> {
         });
         return;
       }
-      final doc =
-          await FirebaseFirestore.instance.collection('users').doc(uid).get();
+      final userRef = FirebaseFirestore.instance.collection('users').doc(uid);
+      final doc = await userRef.get();
       final datos = doc.data() ?? {};
       final peso = (datos['pesoKg'] as num?)?.toDouble() ?? 0;
       final sexo = (datos['sexo'] ?? 'hombre').toString();
@@ -220,10 +224,33 @@ class _RegistroEntrenoState extends State<RegistroEntreno> {
       _pesoCorporalKg = peso;
       _sexo = sexo == 'mujer' ? 'mujer' : 'hombre';
 
+      // Un usuario solo tiene, como mucho, un entreno abierto a la vez: si
+      // existe, seguimos añadiendo a él en vez de empezar uno nuevo. Se
+      // busca solo por igualdad (sin orderBy) para no necesitar un índice
+      // compuesto en Firestore.
+      final abiertos = await userRef
+          .collection('entrenos')
+          .where('estado', isEqualTo: 'abierto')
+          .limit(1)
+          .get();
+
+      _Estado estadoInicial = _Estado.inicio;
+      if (abiertos.docs.isNotEmpty) {
+        final entrenoDoc = abiertos.docs.first;
+        _entrenoAbiertoRef = entrenoDoc.reference;
+        final datosEntreno = entrenoDoc.data();
+        _transcripcion = (datosEntreno['transcripcion'] ?? '').toString();
+        _ejercicios = ((datosEntreno['ejercicios'] as List?) ?? [])
+            .whereType<Map>()
+            .map((e) => _EjercicioEdit.desdeJson(Map<String, dynamic>.from(e)))
+            .toList();
+        estadoInicial = _Estado.confirmacion;
+      }
+
       unawaited(_inicializarVoz());
       unawaited(_cargarCatalogo());
 
-      if (mounted) setState(() => _estado = _Estado.inicio);
+      if (mounted) setState(() => _estado = estadoInicial);
     } catch (_) {
       if (mounted) {
         setState(() {
@@ -438,7 +465,7 @@ class _RegistroEntrenoState extends State<RegistroEntreno> {
 
     if (texto.length > _maxCaracteresNota) {
       setState(() => _estado = _estadoPrevioEscucha);
-      _mostrarError(
+      _mostrarMensaje(
           'La nota es demasiado larga. Divide el entreno en varias notas.');
       return;
     }
@@ -472,14 +499,14 @@ class _RegistroEntrenoState extends State<RegistroEntreno> {
       });
     } on _ErrorApi catch (e) {
       setState(() => _estado = _estadoPrevioEscucha);
-      _mostrarError(e.mensaje);
+      _mostrarMensaje(e.mensaje);
     } catch (_) {
       setState(() => _estado = _estadoPrevioEscucha);
-      _mostrarError('Ha ocurrido un error. Inténtalo de nuevo.');
+      _mostrarMensaje('Ha ocurrido un error. Inténtalo de nuevo.');
     }
   }
 
-  Future<void> _guardar() async {
+  Future<void> _guardar({required bool completar}) async {
     setState(() => _guardandoAhora = true);
     try {
       final json = await _llamarBackend('/v1/entreno/calcular', {
@@ -503,36 +530,59 @@ class _RegistroEntrenoState extends State<RegistroEntreno> {
       if (avisos.isNotEmpty) {
         final continuar = await _confirmarPeseALosAvisos(avisos);
         if (continuar != true) {
-          setState(() => _guardandoAhora = false);
+          if (mounted) setState(() => _guardandoAhora = false);
           return;
         }
       }
 
       final uid = FirebaseAuth.instance.currentUser!.uid;
-      final referencia = await FirebaseFirestore.instance
-          .collection('users')
-          .doc(uid)
-          .collection('entrenos')
-          .add({
-        'fecha': FieldValue.serverTimestamp(),
+      final datosEntreno = {
         'transcripcion': _transcripcion,
         'pesoCorporalKg': _pesoCorporalKg,
         'ejercicios': recalculados.map((e) => e.aFirestore()).toList(),
-      });
+        'ultimaActualizacion': FieldValue.serverTimestamp(),
+        'estado': completar ? 'completo' : 'abierto',
+        if (completar) 'fechaCompletado': FieldValue.serverTimestamp(),
+      };
+
+      DocumentReference referencia;
+      if (_entrenoAbiertoRef == null) {
+        referencia = await FirebaseFirestore.instance
+            .collection('users')
+            .doc(uid)
+            .collection('entrenos')
+            .add({...datosEntreno, 'fecha': FieldValue.serverTimestamp()});
+        if (!completar) _entrenoAbiertoRef = referencia;
+      } else {
+        referencia = _entrenoAbiertoRef!;
+        await referencia.set(datosEntreno, SetOptions(merge: true));
+        if (completar) _entrenoAbiertoRef = null;
+      }
+
+      if (!completar) {
+        if (!mounted) return;
+        setState(() => _guardandoAhora = false);
+        _mostrarMensaje(
+            'Guardado. Puedes seguir añadiendo ejercicios cuando quieras.',
+            esError: false);
+        return;
+      }
 
       FFAppState().update(() {
         FFAppState().entrenoGuardadoRef = referencia;
       });
-
       await widget.onGuardado();
     } on _ErrorApi catch (e) {
-      if (mounted) _mostrarError(e.mensaje);
+      if (mounted) {
+        setState(() => _guardandoAhora = false);
+        _mostrarMensaje(e.mensaje);
+      }
     } catch (_) {
-      if (mounted)
-        _mostrarError(
+      if (mounted) {
+        setState(() => _guardandoAhora = false);
+        _mostrarMensaje(
             'No se ha podido guardar el entreno. Inténtalo de nuevo.');
-    } finally {
-      if (mounted) setState(() => _guardandoAhora = false);
+      }
     }
   }
 
@@ -599,7 +649,7 @@ class _RegistroEntrenoState extends State<RegistroEntreno> {
     );
   }
 
-  void _mostrarError(String mensaje) {
+  void _mostrarMensaje(String mensaje, {bool esError = true}) {
     final tema = FlutterFlowTheme.of(context);
     ScaffoldMessenger.of(context).hideCurrentSnackBar();
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(
@@ -607,7 +657,7 @@ class _RegistroEntrenoState extends State<RegistroEntreno> {
       backgroundColor: tema.secondaryBackground,
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(14),
-        side: BorderSide(color: tema.error),
+        side: BorderSide(color: esError ? tema.error : tema.secondary),
       ),
       content: Text(mensaje,
           style: tema.bodyMedium.copyWith(color: tema.primaryText)),
@@ -773,9 +823,9 @@ class _RegistroEntrenoState extends State<RegistroEntreno> {
       context: context,
       builder: (ctx) => AlertDialog(
         backgroundColor: tema.secondaryBackground,
-        title: Text('¿Descartar entreno?',
+        title: Text('¿Salir sin guardar?',
             style: TextStyle(color: tema.primaryText)),
-        content: Text('Se perderá lo que has dictado.',
+        content: Text('Perderás los cambios que no hayas guardado.',
             style: TextStyle(color: tema.secondaryText)),
         actions: [
           TextButton(
@@ -1249,18 +1299,32 @@ class _RegistroEntrenoState extends State<RegistroEntreno> {
         ),
         Padding(
           padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
-          child: Row(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              Expanded(
-                child: _botonPrincipal('Descartar',
-                    _guardandoAhora ? null : () => context.safePop(),
-                    relleno: false),
+              _botonPrincipal(
+                _guardandoAhora ? 'Guardando...' : 'Guardar',
+                (_guardandoAhora || _ejercicios.isEmpty)
+                    ? null
+                    : () => _guardar(completar: false),
+                relleno: false,
               ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: _botonPrincipal(
-                  _guardandoAhora ? 'Guardando...' : 'Guardar entreno',
-                  (_guardandoAhora || _ejercicios.isEmpty) ? null : _guardar,
+              const SizedBox(height: 10),
+              ElevatedButton.icon(
+                onPressed: (_guardandoAhora || _ejercicios.isEmpty)
+                    ? null
+                    : () => _guardar(completar: true),
+                icon:
+                    const Icon(Icons.check_circle_rounded, color: Colors.white),
+                label: Text(
+                    _guardandoAhora ? 'Guardando...' : 'Sesión completa',
+                    style: const TextStyle(fontWeight: FontWeight.w700)),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: tema.secondary,
+                  disabledBackgroundColor: _tinte(tema.secondary, 0.4),
+                  foregroundColor: Colors.white,
+                  shape: const StadiumBorder(),
+                  padding: const EdgeInsets.symmetric(vertical: 15),
                 ),
               ),
             ],
@@ -1293,7 +1357,9 @@ class _RegistroEntrenoState extends State<RegistroEntreno> {
         cuerpo = _vistaProcesando();
         break;
       case _Estado.confirmacion:
-        titulo = 'Revisa tu entreno';
+        titulo = _entrenoAbiertoRef != null
+            ? 'Tu entreno de hoy'
+            : 'Revisa tu entreno';
         cuerpo = _vistaConfirmacion();
         break;
       case _Estado.guardando:
