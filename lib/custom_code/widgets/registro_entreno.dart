@@ -146,8 +146,12 @@ class RegistroEntreno extends StatefulWidget {
 
 class _RegistroEntrenoState extends State<RegistroEntreno> {
   final stt.SpeechToText _voz = stt.SpeechToText();
-  bool _vozDisponible = false;
+  bool _vozCapaz = false; // el dispositivo admite dictado por voz
+  bool _prefiereTexto = false; // el usuario ha elegido escribir en su lugar
   String _localeVoz = 'es_ES';
+
+  /// Si hay que mostrar el micrófono ahora mismo (capacidad + preferencia).
+  bool get _vozDisponible => _vozCapaz && !_prefiereTexto;
 
   _Estado _estado = _Estado.cargando;
   String? _errorCarga;
@@ -162,8 +166,9 @@ class _RegistroEntrenoState extends State<RegistroEntreno> {
   Timer? _cronometro;
   int _segundosEscucha = 0;
 
-  bool _procesandoTexto = false;
-  String? _errorProceso;
+  /// Estado al que se vuelve tras escuchar: 'inicio' en el primer dictado,
+  /// 'confirmacion' cuando el usuario pulsa "Dictar más" desde la revisión.
+  _Estado _estadoPrevioEscucha = _Estado.inicio;
   bool _guardandoAhora = false;
 
   String _transcripcion = '';
@@ -230,22 +235,32 @@ class _RegistroEntrenoState extends State<RegistroEntreno> {
   }
 
   Future<void> _inicializarVoz() async {
+    final capaz = await _intentarInicializarVoz();
+    if (mounted) setState(() => _vozCapaz = capaz);
+  }
+
+  Future<bool> _intentarInicializarVoz({bool esReintento = false}) async {
     try {
       final disponible = await _voz.initialize(
         onStatus: _alCambiarEstadoVoz,
         onError: (e) => _finalizarEscucha(),
       );
       if (!disponible) {
-        if (mounted) setState(() => _vozDisponible = false);
-        return;
+        // Algunos dispositivos tardan un momento en tener listo el motor de
+        // voz la primera vez; se reintenta una sola vez tras una pausa breve.
+        if (!esReintento) {
+          await Future.delayed(const Duration(milliseconds: 600));
+          return _intentarInicializarVoz(esReintento: true);
+        }
+        return false;
       }
       final locales = await _voz.locales();
       final esp =
           locales.where((l) => l.localeId.toLowerCase().startsWith('es'));
       if (esp.isNotEmpty) _localeVoz = esp.first.localeId;
-      if (mounted) setState(() => _vozDisponible = true);
+      return true;
     } catch (_) {
-      if (mounted) setState(() => _vozDisponible = false);
+      return false;
     }
   }
 
@@ -282,11 +297,11 @@ class _RegistroEntrenoState extends State<RegistroEntreno> {
   // ---------- Dictado ----------
 
   void _empezarEscucha() {
+    _estadoPrevioEscucha = _estado; // inicio o confirmacion (al dictar más)
     setState(() {
       _estado = _Estado.escuchando;
       _textoEscuchado = '';
       _segundosEscucha = 0;
-      _errorProceso = null;
     });
     _cronometro?.cancel();
     _cronometro = Timer.periodic(const Duration(seconds: 1), (_) {
@@ -311,7 +326,7 @@ class _RegistroEntrenoState extends State<RegistroEntreno> {
     if (!mounted) return;
     final texto = _textoEscuchado.trim();
     if (texto.isEmpty) {
-      setState(() => _estado = _Estado.inicio);
+      setState(() => _estado = _estadoPrevioEscucha);
       return;
     }
     _procesar(texto);
@@ -321,9 +336,65 @@ class _RegistroEntrenoState extends State<RegistroEntreno> {
     _cronometro?.cancel();
     _voz.cancel();
     setState(() {
-      _estado = _Estado.inicio;
+      _estado = _estadoPrevioEscucha;
       _textoEscuchado = '';
     });
+  }
+
+  /// Alternativa a dictar cuando el reconocimiento de voz no está disponible
+  /// (p. ej. test mode) y el usuario quiere añadir más ejercicios a mano.
+  Future<void> _dictarMasTexto() async {
+    final tema = FlutterFlowTheme.of(context);
+    final controlador = TextEditingController();
+    final texto = await showModalBottomSheet<String>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: tema.secondaryBackground,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      builder: (ctx) => Padding(
+        padding: EdgeInsets.only(
+          left: 20,
+          right: 20,
+          top: 16,
+          bottom: MediaQuery.of(ctx).viewInsets.bottom + 16,
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Text('Añadir más ejercicios',
+                style: tema.titleMedium.copyWith(
+                    color: tema.primaryText, fontWeight: FontWeight.w700)),
+            const SizedBox(height: 12),
+            TextField(
+              controller: controlador,
+              autofocus: true,
+              maxLines: 3,
+              minLines: 2,
+              style: TextStyle(color: tema.primaryText),
+              decoration: InputDecoration(
+                hintText: 'Por ejemplo: sentadilla 3 series de 10 con 60 kilos',
+                hintStyle: TextStyle(color: tema.secondaryText),
+                filled: true,
+                fillColor: tema.primaryBackground,
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(14),
+                  borderSide: BorderSide(color: tema.alternate),
+                ),
+              ),
+            ),
+            const SizedBox(height: 14),
+            _botonPrincipal(
+                'Añadir', () => Navigator.of(ctx).pop(controlador.text.trim())),
+          ],
+        ),
+      ),
+    );
+    if (texto == null || texto.isEmpty) return;
+    _estadoPrevioEscucha = _Estado.confirmacion;
+    _procesar(texto);
   }
 
   // ---------- Llamadas al backend ----------
@@ -363,12 +434,12 @@ class _RegistroEntrenoState extends State<RegistroEntreno> {
   }
 
   Future<void> _procesar(String texto) async {
+    final anadiendo = _estadoPrevioEscucha == _Estado.confirmacion;
+
     if (texto.length > _maxCaracteresNota) {
-      setState(() {
-        _estado = _Estado.inicio;
-        _errorProceso =
-            'La nota es demasiado larga. Divide el entreno en varias notas.';
-      });
+      setState(() => _estado = _estadoPrevioEscucha);
+      _mostrarError(
+          'La nota es demasiado larga. Divide el entreno en varias notas.');
       return;
     }
     setState(() => _estado = _Estado.procesando);
@@ -378,28 +449,33 @@ class _RegistroEntrenoState extends State<RegistroEntreno> {
         'pesoCorporalKg': _pesoCorporalKg,
         'sexo': _sexo,
       });
-      final ejercicios = ((json['ejercicios'] as List?) ?? [])
+      final ejerciciosNuevos = ((json['ejercicios'] as List?) ?? [])
           .map((e) =>
               _EjercicioEdit.desdeJson(Map<String, dynamic>.from(e as Map)))
           .toList();
+      final avisosNuevos =
+          ((json['avisos'] as List?) ?? []).map((a) => a.toString()).toList();
+      final transcripcionNueva = (json['transcripcion'] ?? texto).toString();
+
       setState(() {
-        _transcripcion = (json['transcripcion'] ?? texto).toString();
-        _ejercicios = ejercicios;
-        _avisos =
-            ((json['avisos'] as List?) ?? []).map((a) => a.toString()).toList();
-        _notasRestantes = (json['notasRestantes'] as num?)?.toInt();
+        if (anadiendo) {
+          _ejercicios = [..._ejercicios, ...ejerciciosNuevos];
+          _transcripcion = '$_transcripcion  ·  $transcripcionNueva';
+        } else {
+          _ejercicios = ejerciciosNuevos;
+          _transcripcion = transcripcionNueva;
+        }
+        _avisos = avisosNuevos;
+        _notasRestantes =
+            (json['notasRestantes'] as num?)?.toInt() ?? _notasRestantes;
         _estado = _Estado.confirmacion;
       });
     } on _ErrorApi catch (e) {
-      setState(() {
-        _estado = _Estado.inicio;
-        _errorProceso = e.mensaje;
-      });
+      setState(() => _estado = _estadoPrevioEscucha);
+      _mostrarError(e.mensaje);
     } catch (_) {
-      setState(() {
-        _estado = _Estado.inicio;
-        _errorProceso = 'Ha ocurrido un error. Inténtalo de nuevo.';
-      });
+      setState(() => _estado = _estadoPrevioEscucha);
+      _mostrarError('Ha ocurrido un error. Inténtalo de nuevo.');
     }
   }
 
@@ -783,20 +859,6 @@ class _RegistroEntrenoState extends State<RegistroEntreno> {
             child: Column(
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
-                if (_errorProceso != null) ...[
-                  Container(
-                    padding: const EdgeInsets.all(14),
-                    margin: const EdgeInsets.only(bottom: 24),
-                    decoration: BoxDecoration(
-                      color: _tinte(tema.error, 0.12),
-                      borderRadius: BorderRadius.circular(14),
-                      border: Border.all(color: _tinte(tema.error, 0.4)),
-                    ),
-                    child: Text(_errorProceso!,
-                        style:
-                            tema.bodySmall.copyWith(color: tema.primaryText)),
-                  ),
-                ],
                 Icon(Icons.fitness_center_rounded,
                     size: 40, color: tema.primary),
                 const SizedBox(height: 16),
@@ -841,13 +903,26 @@ class _RegistroEntrenoState extends State<RegistroEntreno> {
           ),
           if (_vozDisponible) ...[
             TextButton(
-              onPressed: () => setState(() => _vozDisponible = false),
+              onPressed: () => setState(() => _prefiereTexto = true),
               child: Text('Escribir en su lugar',
                   style: TextStyle(
                       color: tema.secondaryText,
                       decoration: TextDecoration.underline)),
             ),
           ] else ...[
+            if (_vozCapaz) ...[
+              Align(
+                alignment: Alignment.centerRight,
+                child: TextButton(
+                  onPressed: () => setState(() => _prefiereTexto = false),
+                  child: Text('Probar con el micrófono',
+                      style: TextStyle(
+                          color: tema.primary,
+                          decoration: TextDecoration.underline)),
+                ),
+              ),
+              const SizedBox(height: 4),
+            ],
             TextField(
               controller: _controladorTexto,
               maxLines: 4,
@@ -1136,12 +1211,31 @@ class _RegistroEntrenoState extends State<RegistroEntreno> {
                 ],
                 const SizedBox(height: 16),
                 ..._ejercicios.asMap().keys.map((i) => _tarjetaEjercicio(i)),
-                TextButton.icon(
-                  onPressed: _agregarEjercicioVacio,
-                  icon: Icon(Icons.add_circle_outline_rounded,
-                      color: tema.primary),
-                  label: Text('Añadir ejercicio',
-                      style: TextStyle(color: tema.primary)),
+                Row(
+                  children: [
+                    Expanded(
+                      child: TextButton.icon(
+                        onPressed:
+                            _vozDisponible ? _empezarEscucha : _dictarMasTexto,
+                        icon: Icon(
+                            _vozDisponible
+                                ? Icons.mic_rounded
+                                : Icons.edit_note_rounded,
+                            color: tema.primary),
+                        label: Text('Dictar más',
+                            style: TextStyle(color: tema.primary)),
+                      ),
+                    ),
+                    Expanded(
+                      child: TextButton.icon(
+                        onPressed: _agregarEjercicioVacio,
+                        icon: Icon(Icons.add_circle_outline_rounded,
+                            color: tema.secondaryText),
+                        label: Text('Añadir manual',
+                            style: TextStyle(color: tema.secondaryText)),
+                      ),
+                    ),
+                  ],
                 ),
                 if (_notasRestantes != null) ...[
                   const SizedBox(height: 4),

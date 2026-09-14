@@ -56,6 +56,9 @@ class _RecordWorkoutWidgetState extends State<RecordWorkoutWidget> {
             width: double.infinity,
             height: double.infinity,
             onGuardado: () async {
+              if (Navigator.of(context).canPop()) {
+                context.pop();
+              }
               context.pushNamed(
                 WorkoutAnalysisWidget.routeName,
                 queryParameters: {

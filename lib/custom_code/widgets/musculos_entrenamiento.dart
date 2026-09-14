@@ -425,8 +425,25 @@ class _MusculosEntrenamientoState extends State<MusculosEntrenamiento> {
                 ],
               ),
             ),
+          const SizedBox(height: 20),
+          _botonVolverInicio(),
         ],
       ),
+    );
+  }
+
+  Widget _botonVolverInicio() {
+    final tema = FlutterFlowTheme.of(context);
+    return ElevatedButton(
+      onPressed: () => context.goNamed('Home'),
+      style: ElevatedButton.styleFrom(
+        backgroundColor: tema.primary,
+        foregroundColor: Colors.white,
+        shape: const StadiumBorder(),
+        padding: const EdgeInsets.symmetric(vertical: 15),
+      ),
+      child: const Text('Volver al inicio',
+          style: TextStyle(fontWeight: FontWeight.w700)),
     );
   }
 
