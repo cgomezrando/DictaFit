@@ -224,57 +224,6 @@ class _HomeDictaFitState extends State<HomeDictaFit> {
     context.goNamedAuth('Login', context.mounted);
   }
 
-  Future<void> _abrirHojaPerfil(String nombre, String email) async {
-    final tema = FlutterFlowTheme.of(context);
-    final cerrar = await showModalBottomSheet<bool>(
-      context: context,
-      backgroundColor: tema.secondaryBackground,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
-      ),
-      builder: (ctx) {
-        return SafeArea(
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(20, 12, 20, 20),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                _asaHoja(),
-                const SizedBox(height: 18),
-                Text(
-                  nombre.isEmpty ? 'Tu cuenta' : nombre,
-                  style: tema.titleLarge.copyWith(
-                    color: tema.primaryText,
-                    fontWeight: FontWeight.w700,
-                  ),
-                ),
-                if (email.isNotEmpty) ...[
-                  const SizedBox(height: 2),
-                  Text(
-                    email,
-                    style: tema.bodyMedium.copyWith(color: tema.secondaryText),
-                  ),
-                ],
-                const SizedBox(height: 18),
-                _opcionHoja(
-                  icono: Icons.logout_rounded,
-                  acento: tema.error,
-                  titulo: 'Cerrar sesión',
-                  subtitulo: 'Podrás volver a entrar con tu correo',
-                  alPulsar: () => Navigator.of(ctx).pop(true),
-                ),
-              ],
-            ),
-          ),
-        );
-      },
-    );
-    if (cerrar == true && mounted) {
-      await _cerrarSesion();
-    }
-  }
-
   Future<void> _abrirHojaRegistro() async {
     final tema = FlutterFlowTheme.of(context);
     final eleccion = await showModalBottomSheet<String>(
@@ -464,7 +413,7 @@ class _HomeDictaFitState extends State<HomeDictaFit> {
     return Row(
       children: [
         GestureDetector(
-          onTap: () => _abrirHojaPerfil(nombre, email),
+          onTap: () => context.pushNamed('Profile'),
           child: Container(
             width: 54,
             height: 54,
@@ -1149,7 +1098,7 @@ class _HomeDictaFitState extends State<HomeDictaFit> {
             icono: Icons.person_rounded,
             texto: 'Perfil',
             activo: false,
-            alPulsar: () => _abrirHojaPerfil(nombre, email),
+            alPulsar: () => context.pushNamed('Profile'),
           ),
         ],
       ),

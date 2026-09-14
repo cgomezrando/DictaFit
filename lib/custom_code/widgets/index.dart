@@ -4,3 +4,4 @@ export '/custom_code/widgets/home_dicta_fit.dart' show HomeDictaFit;
 export '/custom_code/widgets/musculos_entrenamiento.dart'
     show MusculosEntrenamiento;
 export '/custom_code/widgets/registro_entreno.dart' show RegistroEntreno;
+export '/custom_code/widgets/perfil_usuario.dart' show PerfilUsuario;

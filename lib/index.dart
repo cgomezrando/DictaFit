@@ -5,3 +5,4 @@ export '/pages/workout_analysis/workout_analysis_widget.dart'
     show WorkoutAnalysisWidget;
 export '/pages/record_workout/record_workout_widget.dart'
     show RecordWorkoutWidget;
+export '/pages/profile/profile_widget.dart' show ProfileWidget;
