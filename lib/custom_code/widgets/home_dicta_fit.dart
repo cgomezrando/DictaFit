@@ -779,7 +779,7 @@ class _HomeDictaFitState extends State<HomeDictaFit> {
                       _botonMicro(acento, alHablar, tamano: 72),
                       const SizedBox(height: 2),
                       Text(
-                        'Hablar',
+                        'Registrar',
                         style: tema.bodySmall.copyWith(
                           color: acento,
                           fontWeight: FontWeight.w600,
@@ -1045,7 +1045,7 @@ class _HomeDictaFitState extends State<HomeDictaFit> {
             icono: Icons.history_rounded,
             texto: 'Historial',
             activo: false,
-            alPulsar: () => _proximamente('El historial'),
+            alPulsar: () => context.pushNamed('History'),
           ),
           SizedBox(
             width: 76,
@@ -1204,7 +1204,7 @@ class _HomeDictaFitState extends State<HomeDictaFit> {
                                       titulo: 'Entrenamiento',
                                       descripcion:
                                           'Dicta tu rutina y calculamos tu fuerza y los músculos trabajados.',
-                                      textoBoton: 'Ver análisis',
+                                      textoBoton: 'Ver último entrenamiento',
                                       alHablar: () =>
                                           context.pushNamed('RecordWorkout'),
                                       alBoton: () =>

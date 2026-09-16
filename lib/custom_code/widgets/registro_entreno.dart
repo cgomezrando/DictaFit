@@ -197,6 +197,16 @@ class _RegistroEntrenoState extends State<RegistroEntreno> {
   /// Documento del entreno abierto (si ya existía uno al entrar, o el que
   /// se crea al primer guardado). Null hasta que se guarda por primera vez.
   DocumentReference? _entrenoAbiertoRef;
+
+  /// Foto de _ejercicios/_transcripcion en el último guardado con éxito (o
+  /// al cargar un entreno existente), para saber si hay cambios sin guardar
+  /// y no preguntar "¿salir?" cuando no hay nada que perder.
+  String? _ultimoGuardadoSerializado;
+
+  String _serializarEstado() => jsonEncode({
+        't': _transcripcion,
+        'e': _ejercicios.map((e) => e.aFirestore()).toList()
+      });
   List<String> _avisos = [];
   int? _notasRestantes;
 
@@ -261,6 +271,7 @@ class _RegistroEntrenoState extends State<RegistroEntreno> {
             .map((e) => _EjercicioEdit.desdeJson(Map<String, dynamic>.from(e)))
             .toList();
         estadoInicial = _Estado.confirmacion;
+        _ultimoGuardadoSerializado = _serializarEstado();
       } else {
         // Un usuario solo tiene, como mucho, un entreno abierto a la vez: si
         // existe, seguimos añadiendo a él en vez de empezar uno nuevo. Se
@@ -283,6 +294,7 @@ class _RegistroEntrenoState extends State<RegistroEntreno> {
                   (e) => _EjercicioEdit.desdeJson(Map<String, dynamic>.from(e)))
               .toList();
           estadoInicial = _Estado.confirmacion;
+          _ultimoGuardadoSerializado = _serializarEstado();
         }
       }
 
@@ -606,6 +618,7 @@ class _RegistroEntrenoState extends State<RegistroEntreno> {
       }, SetOptions(merge: true));
 
       if (!mounted) return;
+      _ultimoGuardadoSerializado = _serializarEstado();
       context.safePop();
     } on _ErrorApi catch (e) {
       if (mounted) {
@@ -676,6 +689,7 @@ class _RegistroEntrenoState extends State<RegistroEntreno> {
 
       if (!completar) {
         if (!mounted) return;
+        _ultimoGuardadoSerializado = _serializarEstado();
         setState(() => _guardandoAhora = false);
         _mostrarMensaje(
             'Guardado. Puedes seguir añadiendo ejercicios cuando quieras.',
@@ -927,29 +941,70 @@ class _RegistroEntrenoState extends State<RegistroEntreno> {
   }
 
   Future<void> _confirmarSalida() async {
-    if (_estado == _Estado.inicio ||
+    final sinCambios = _estado == _Estado.inicio ||
         _estado == _Estado.cargando ||
-        _estado == _Estado.error) {
+        _estado == _Estado.error ||
+        _serializarEstado() == _ultimoGuardadoSerializado;
+    if (sinCambios) {
       context.safePop();
       return;
     }
     final tema = FlutterFlowTheme.of(context);
-    final salir = await showDialog<bool>(
+    final salir = await showModalBottomSheet<bool>(
       context: context,
-      builder: (ctx) => AlertDialog(
-        backgroundColor: tema.secondaryBackground,
-        title: Text('¿Salir sin guardar?',
-            style: TextStyle(color: tema.primaryText)),
-        content: Text('Perderás los cambios que no hayas guardado.',
-            style: TextStyle(color: tema.secondaryText)),
-        actions: [
-          TextButton(
-              onPressed: () => Navigator.of(ctx).pop(false),
-              child: Text('Seguir', style: TextStyle(color: tema.primary))),
-          TextButton(
-              onPressed: () => Navigator.of(ctx).pop(true),
-              child: Text('Descartar', style: TextStyle(color: tema.error))),
-        ],
+      backgroundColor: tema.secondaryBackground,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      builder: (ctx) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(20, 16, 20, 20),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Center(
+                child: Container(
+                  width: 40,
+                  height: 4,
+                  margin: const EdgeInsets.only(bottom: 18),
+                  decoration: BoxDecoration(
+                    color: tema.alternate,
+                    borderRadius: BorderRadius.circular(999),
+                  ),
+                ),
+              ),
+              Text('Tienes cambios sin guardar',
+                  style: tema.titleMedium.copyWith(
+                      color: tema.primaryText, fontWeight: FontWeight.w700)),
+              const SizedBox(height: 8),
+              Text('Si sales ahora, se perderá lo que no hayas guardado.',
+                  style: tema.bodyMedium.copyWith(color: tema.secondaryText)),
+              const SizedBox(height: 20),
+              ElevatedButton(
+                onPressed: () => Navigator.of(ctx).pop(false),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: tema.primary,
+                  foregroundColor: Colors.white,
+                  shape: const StadiumBorder(),
+                  padding: const EdgeInsets.symmetric(vertical: 14),
+                ),
+                child: const Text('Continuar en el entreno'),
+              ),
+              const SizedBox(height: 10),
+              OutlinedButton(
+                onPressed: () => Navigator.of(ctx).pop(true),
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: tema.error,
+                  side: BorderSide(color: _tinte(tema.error, 0.5)),
+                  shape: const StadiumBorder(),
+                  padding: const EdgeInsets.symmetric(vertical: 14),
+                ),
+                child: const Text('Salir sin guardar'),
+              ),
+            ],
+          ),
+        ),
       ),
     );
     if (salir == true) {

@@ -149,7 +149,8 @@ class _MusculosEntrenamientoState extends State<MusculosEntrenamiento> {
     return '$pesoTexto × ${reps ?? '—'}';
   }
 
-  Widget _filaEjercicio(Map<String, dynamic> ejercicio, {bool ultima = false}) {
+  Widget _filaEjercicio(Map<String, dynamic> ejercicio,
+      {required double pesoCorporal, bool ultima = false}) {
     final tema = FlutterFlowTheme.of(context);
     final nombre = (ejercicio['nombre'] ?? 'Ejercicio').toString();
     final nivel = (ejercicio['nivel'] ?? '').toString();
@@ -210,9 +211,61 @@ class _MusculosEntrenamientoState extends State<MusculosEntrenamiento> {
               '${ratio > 0 ? '  ·  ${ratio.toStringAsFixed(2)}× tu peso' : ''}',
               style: tema.bodySmall.copyWith(color: tema.secondaryText),
             ),
+            const SizedBox(height: 6),
+            _tablaPesosSugeridos(e1rm, cargaPor, pesoCorporal),
           ],
         ],
       ),
+    );
+  }
+
+  /// Peso orientativo para distintas repeticiones, a partir del 1RM
+  /// estimado (fórmula de Epley invertida), adaptado a cómo se carga el
+  /// ejercicio: por mancuerna, el lastre añadido en corporal, o el total.
+  String? _pesoParaReps(
+      double e1rm, int reps, String cargaPor, double pesoCorporal) {
+    if (e1rm <= 0) return null;
+    final total = reps <= 1 ? e1rm : e1rm / (1 + reps / 30);
+    switch (cargaPor) {
+      case 'mancuerna':
+        return '${_numeroCorto(total / 2)} kg';
+      case 'corporal':
+        final lastre = total - pesoCorporal;
+        return lastre > 1 ? '+${_numeroCorto(lastre)} kg' : 'sin lastre';
+      default:
+        return '${_numeroCorto(total)} kg';
+    }
+  }
+
+  Widget _tablaPesosSugeridos(
+      double e1rm, String cargaPor, double pesoCorporal) {
+    final tema = FlutterFlowTheme.of(context);
+    const objetivos = [8, 12];
+    final celdas = objetivos
+        .map((reps) {
+          final peso = _pesoParaReps(e1rm, reps, cargaPor, pesoCorporal);
+          if (peso == null) return null;
+          return '$reps: $peso';
+        })
+        .whereType<String>()
+        .toList();
+    if (celdas.isEmpty) return const SizedBox.shrink();
+
+    return Wrap(
+      spacing: 6,
+      runSpacing: 6,
+      children: celdas
+          .map((texto) => Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                decoration: BoxDecoration(
+                  color: tema.primaryBackground,
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: tema.alternate),
+                ),
+                child: Text(texto,
+                    style: tema.bodySmall.copyWith(color: tema.secondaryText)),
+              ))
+          .toList(),
     );
   }
 
@@ -240,7 +293,10 @@ class _MusculosEntrenamientoState extends State<MusculosEntrenamiento> {
                   color: tema.primaryText, fontWeight: FontWeight.w600)),
           const SizedBox(height: 12),
           for (var i = 0; i < ejercicios.length; i++)
-            _filaEjercicio(ejercicios[i], ultima: i == ejercicios.length - 1),
+            _filaEjercicio(ejercicios[i],
+                pesoCorporal:
+                    (entreno['pesoCorporalKg'] as num?)?.toDouble() ?? 0,
+                ultima: i == ejercicios.length - 1),
         ],
       ),
     );
@@ -318,11 +374,24 @@ class _MusculosEntrenamientoState extends State<MusculosEntrenamiento> {
   /// Degradado de rojos: apenas trabajado → un rosa muy pálido cercano al
   /// fondo; muy trabajado → rojo intenso. Se aplica una curva (raíz
   /// cuadrada) para que las diferencias se noten también en la parte baja.
+  /// Degradado de calor con 5 paradas: verde (apenas trabajado) → amarillo
+  /// → naranja → rojo → morado (el músculo más trabajado del entreno). Es
+  /// una escala relativa a este entreno, no un aviso médico de sobreentreno.
+  static const List<Color> _paradasCalor = [
+    Color(0xFF22C55E), // verde
+    Color(0xFFEAB308), // amarillo
+    Color(0xFFF97316), // naranja
+    Color(0xFFEF4444), // rojo
+    Color(0xFFA855F7), // morado
+  ];
+
   Color _colorCalor(double intensidad) {
-    final tema = FlutterFlowTheme.of(context);
     final t = math.sqrt(intensidad.clamp(0.0, 1.0));
-    final frio = Color.lerp(tema.alternate, tema.error, 0.18)!;
-    return Color.lerp(frio, tema.error, t)!;
+    final escalado = t * (_paradasCalor.length - 1);
+    final indice = escalado.floor().clamp(0, _paradasCalor.length - 2);
+    final fraccion = escalado - indice;
+    return Color.lerp(
+        _paradasCalor[indice], _paradasCalor[indice + 1], fraccion)!;
   }
 
   String _construirSvg(Map<String, double> intensidades) {
