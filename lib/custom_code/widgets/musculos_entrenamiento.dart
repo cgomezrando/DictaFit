@@ -344,16 +344,44 @@ class _MusculosEntrenamientoState extends State<MusculosEntrenamiento> {
     return niveles;
   }
 
-  /// Intensidad relativa (0 a 1) de cada músculo dentro de este entreno,
-  /// para el mapa de calor. Combina cuánto interviene el músculo en cada
-  /// ejercicio (peso del catálogo) con el volumen (número de series), y
-  /// normaliza contra el músculo más trabajado del propio entreno.
-  /// Referencia fija para "mucho volumen directo" en un músculo dentro de
-  /// una sola sesión — aproximadamente 4 series como motor principal con
-  /// buena carga (peso de implicación ~0.9 × 4 series × factor de carga ~2).
-  /// Es una primera calibración, no una cifra médica; se puede ajustar con
-  /// el uso real.
-  static const double _referenciaCalor = 8.0;
+  /// Series efectivas por sesión que dejan cada músculo "trabajado a fondo"
+  /// (color máximo). No es una cifra única para todos: los músculos grandes
+  /// (cuádriceps, glúteo, dorsal, pectoral) toleran y necesitan más volumen
+  /// por sesión que los pequeños (cada cabeza del deltoides, antebrazo,
+  /// lumbar). Valores aproximados a partir de los rangos de volumen por
+  /// sesión habituales en la literatura de hipertrofia (landmarks de
+  /// Israetel et al.): ~4 para los pequeños, ~5-6 para los medianos, ~7-8
+  /// para los grandes. Una serie cuenta completa cuando eres motor
+  /// principal (peso ~0.9) y a tu mejor marca.
+  static const Map<String, double> _seriesAFondo = {
+    'cuadriceps': 8,
+    'gluteo': 8,
+    'dorsal': 8,
+    'pectoral_esternal': 7,
+    'isquiotibiales': 6,
+    'pectoral_clavicular': 5,
+    'trapecio': 5,
+    'romboides': 5,
+    'biceps': 5,
+    'triceps': 5,
+    'gemelos': 5,
+    'abdominal': 5,
+    'deltoides_lateral': 5,
+    'deltoides_posterior': 5,
+    'deltoides_anterior': 4,
+    'lumbar': 4,
+    'oblicuos': 4,
+    'antebrazo': 4,
+    'aductores': 4,
+  };
+  static const double _seriesAFondoPorDefecto = 5;
+
+  /// Cuánto cuenta una serie en la que el músculo solo asiste, respecto a
+  /// una en la que es motor principal. Es una decisión de diseño, no un
+  /// ratio de electromiografía: el color debe reflejar sobre todo el trabajo
+  /// directo, y un asistente que aparece en muchos ejercicios (el tríceps en
+  /// un día de pecho) no debe acercarse al color del protagonista.
+  static const double _factorSecundario = 0.08;
 
   static const Map<String, String> _grupoMuscular = {
     'pectoral_clavicular': 'pecho',
@@ -451,6 +479,14 @@ class _MusculosEntrenamientoState extends State<MusculosEntrenamiento> {
     }
   }
 
+  /// Intensidad (0 a 1) de cada músculo en este entreno, para el mapa de
+  /// calor. Suma "series efectivas" por músculo y las compara con las que
+  /// dejan a ese músculo trabajado a fondo (_seriesAFondo). Una serie vale:
+  ///   peso del catálogo × factor de carga × (1 si principal, 0.08 si asiste)
+  /// Las repeticiones no entran aparte: entre ~5 y ~30 repeticiones por
+  /// serie el estímulo por serie es parecido si se llega cerca del fallo
+  /// (Schoenfeld, 2017), y el peso ya influye a través del 1RM estimado,
+  /// que las incorpora.
   Map<String, double> _intensidadesMusculos(Map<String, dynamic> entreno) {
     final bruto = <String, double>{};
     final ejercicios = entreno['ejercicios'];
@@ -460,37 +496,68 @@ class _MusculosEntrenamientoState extends State<MusculosEntrenamiento> {
       if (ejercicio is! Map) continue;
       final musculos = ejercicio['musculos'];
       if (musculos is! List) continue;
+
+      // Solo cuentan las series con peso y repeticiones; una serie sin
+      // datos no puede sumar como si fuera una serie hecha.
       final series = ejercicio['series'];
-      final numSeries = series is List && series.isNotEmpty ? series.length : 1;
-      // Lo cerca que has estado de tu propia mejor marca EN ESE EJERCICIO
-      // (no de tu peso corporal, que no es comparable entre ejercicios
-      // distintos: un curl y una sentadilla nunca dan ratios parecidos).
-      // Sin marca histórica todavía (primera vez), cuenta como tu 100%.
+      var numSeries = 0;
+      if (series is List) {
+        for (final s in series) {
+          if (s is! Map) continue;
+          final kg = (s['kg'] as num?)?.toDouble();
+          final reps = (s['reps'] as num?)?.toInt();
+          if (reps != null &&
+              reps > 0 &&
+              (kg != null || ejercicio['cargaPor'] == 'corporal')) {
+            numSeries++;
+          }
+        }
+      }
+      if (numSeries == 0) continue;
+
+      // Factor de carga: lo cerca que has estado de tu mejor marca EN ESE
+      // EJERCICIO (no de tu peso corporal, que no es comparable entre
+      // ejercicios: un curl y una sentadilla nunca dan ratios parecidos).
+      //   - con marca previa: 1RM de hoy ÷ mejor 1RM histórico
+      //   - primera vez que lo haces: 1.0 (hoy es tu referencia)
+      //   - sin peso registrado (1RM = 0): 0.5, carga desconocida
       final ejercicioId = (ejercicio['ejercicioId'] ?? '').toString();
       final e1rm = (ejercicio['e1rmKg'] as num?)?.toDouble() ?? 0;
       final mejorHistorico = _marcasCache[ejercicioId];
-      final factorCarga = (mejorHistorico == null || mejorHistorico <= 0)
-          ? 1.0
-          : (e1rm / mejorHistorico).clamp(0.0, 1.0);
+      double factorCarga;
+      if (e1rm <= 0) {
+        factorCarga = 0.5;
+      } else if (mejorHistorico == null || mejorHistorico <= 0) {
+        factorCarga = 1.0;
+      } else {
+        factorCarga = (e1rm / mejorHistorico).clamp(0.0, 1.0);
+      }
+
       for (final m in musculos) {
         if (m is! Map) continue;
         final id = (m['musculo'] ?? '').toString().trim().toLowerCase();
         if (id.isEmpty) continue;
         final peso = (m['peso'] as num?)?.toDouble() ?? 0.5;
-        bruto[id] = (bruto[id] ?? 0) + peso * numSeries * factorCarga;
+        final rol = (m['rol'] ?? '').toString().trim().toLowerCase();
+        final factorRol = rol == 'principal' ? 1.0 : _factorSecundario;
+        bruto[id] =
+            (bruto[id] ?? 0) + peso * numSeries * factorCarga * factorRol;
       }
     }
     if (bruto.isEmpty) return {};
-    // Escala fija (no relativa al máximo de este entreno): así el mismo
-    // esfuerzo sobre un músculo se ve siempre del mismo color, sea cual sea
-    // el resto de la sesión.
-    return bruto.map((id, valor) =>
-        MapEntry(id, (valor / _referenciaCalor).clamp(0.0, 1.0)));
+    // Escala fija por músculo (no relativa al máximo de este entreno): el
+    // mismo trabajo sobre un músculo se ve siempre del mismo color, sea
+    // cual sea el resto de la sesión. Se divide por 0.9 porque una serie
+    // "completa" es la de un motor principal típico (peso 0.9).
+    return bruto.map((id, valor) {
+      final referencia = 0.9 * (_seriesAFondo[id] ?? _seriesAFondoPorDefecto);
+      return MapEntry(id, (valor / referencia).clamp(0.0, 1.0));
+    });
   }
 
   /// Degradado de calor con 5 paradas: verde (apenas trabajado) → amarillo
-  /// → naranja → rojo → granate (mucho volumen directo en este músculo).
-  /// Escala fija, no relativa a cada entreno (ver _referenciaCalor).
+  /// → naranja → rojo → granate (trabajado a fondo para ese músculo).
+  /// Escala fija por músculo, no relativa a cada entreno (ver _seriesAFondo).
   static const List<Color> _paradasCalor = [
     Color(0xFF22C55E), // verde
     Color(0xFFEAB308), // amarillo
