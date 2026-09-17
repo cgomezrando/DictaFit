@@ -38,6 +38,11 @@ class _MusculosEntrenamientoState extends State<MusculosEntrenamiento> {
   static const int _nivelSecundario = 1;
   static const int _nivelPrincipal = 2;
 
+  /// Mejor 1RM histórico por ejercicio (users/{uid}/marcasPersonales),
+  /// cargado bajo demanda según qué ejercicios aparecen en el entreno.
+  final Map<String, double> _marcasCache = {};
+  final Set<String> _marcasEnCarga = {};
+
   static const Map<String, String> _nombres = {
     'pectoral_clavicular': 'Pectoral superior',
     'pectoral_esternal': 'Pectoral inferior',
@@ -156,6 +161,7 @@ class _MusculosEntrenamientoState extends State<MusculosEntrenamiento> {
     final nivel = (ejercicio['nivel'] ?? '').toString();
     final cargaPor = (ejercicio['cargaPor'] ?? '').toString();
     final e1rm = (ejercicio['e1rmKg'] as num?)?.toDouble() ?? 0;
+    final e1rmPromedio = (ejercicio['e1rmPromedioKg'] as num?)?.toDouble() ?? 0;
     final ratio = (ejercicio['ratioPeso'] as num?)?.toDouble() ?? 0;
     final series = ((ejercicio['series'] as List?) ?? [])
         .whereType<Map>()
@@ -212,7 +218,8 @@ class _MusculosEntrenamientoState extends State<MusculosEntrenamiento> {
               style: tema.bodySmall.copyWith(color: tema.secondaryText),
             ),
             const SizedBox(height: 6),
-            _tablaPesosSugeridos(e1rm, cargaPor, pesoCorporal),
+            _tablaPesosSugeridos(
+                e1rmPromedio > 0 ? e1rmPromedio : e1rm, cargaPor, pesoCorporal),
           ],
         ],
       ),
@@ -341,21 +348,130 @@ class _MusculosEntrenamientoState extends State<MusculosEntrenamiento> {
   /// para el mapa de calor. Combina cuánto interviene el músculo en cada
   /// ejercicio (peso del catálogo) con el volumen (número de series), y
   /// normaliza contra el músculo más trabajado del propio entreno.
+  /// Referencia fija para "mucho volumen directo" en un músculo dentro de
+  /// una sola sesión — aproximadamente 4 series como motor principal con
+  /// buena carga (peso de implicación ~0.9 × 4 series × factor de carga ~2).
+  /// Es una primera calibración, no una cifra médica; se puede ajustar con
+  /// el uso real.
+  static const double _referenciaCalor = 8.0;
+
+  static const Map<String, String> _grupoMuscular = {
+    'pectoral_clavicular': 'pecho',
+    'pectoral_esternal': 'pecho',
+    'deltoides_anterior': 'hombro',
+    'deltoides_lateral': 'hombro',
+    'deltoides_posterior': 'hombro',
+    'trapecio': 'hombro',
+    'triceps': 'brazo',
+    'biceps': 'brazo',
+    'antebrazo': 'brazo',
+    'dorsal': 'espalda',
+    'romboides': 'espalda',
+    'lumbar': 'espalda',
+    'abdominal': 'core',
+    'oblicuos': 'core',
+    'gluteo': 'pierna',
+    'cuadriceps': 'pierna',
+    'isquiotibiales': 'pierna',
+    'aductores': 'pierna',
+    'gemelos': 'pierna',
+  };
+
+  static const Map<String, String> _nombreGrupo = {
+    'pecho': 'pecho',
+    'hombro': 'hombros',
+    'brazo': 'brazos',
+    'espalda': 'espalda',
+    'core': 'abdomen',
+    'pierna': 'piernas',
+  };
+
+  /// Título del día a partir de qué grupos musculares se trabajaron como
+  /// motor principal (no de los nombres de los ejercicios). Es orientativo:
+  /// una sesión repartida entre varios grupos se llama "cuerpo completo".
+  String? _tituloSesion(Map<String, dynamic> entreno) {
+    final pesos = <String, double>{};
+    final ejercicios = entreno['ejercicios'];
+    if (ejercicios is! List) return null;
+    for (final ejercicio in ejercicios) {
+      if (ejercicio is! Map) continue;
+      final musculos = ejercicio['musculos'];
+      if (musculos is! List) continue;
+      for (final m in musculos) {
+        if (m is! Map) continue;
+        if ((m['rol'] ?? '').toString().toLowerCase() != 'principal') continue;
+        final grupo =
+            _grupoMuscular[(m['musculo'] ?? '').toString().toLowerCase()];
+        if (grupo == null) continue;
+        final peso = (m['peso'] as num?)?.toDouble() ?? 0.5;
+        pesos[grupo] = (pesos[grupo] ?? 0) + peso;
+      }
+    }
+    if (pesos.isEmpty) return null;
+    final total = pesos.values.fold(0.0, (a, b) => a + b);
+    final orden = pesos.entries.toList()
+      ..sort((a, b) => b.value.compareTo(a.value));
+    final top = orden.first;
+    if (orden.length == 1 || top.value / total >= 0.65) {
+      return 'Día de ${_nombreGrupo[top.key]}';
+    }
+    final segundo = orden[1];
+    if ((top.value + segundo.value) / total >= 0.75) {
+      return 'Día de ${_nombreGrupo[top.key]} y ${_nombreGrupo[segundo.key]}';
+    }
+    return 'Entreno de cuerpo completo';
+  }
+
+  /// Pide a Firestore la mejor marca de cada ejercicio del entreno que aún
+  /// no tengamos en caché, y repinta cuando llegan. Es una lectura por
+  /// ejercicio (no por músculo), así que son pocas por pantalla.
+  void _cargarMarcasFaltantes(List ejercicios) {
+    final uid = FirebaseAuth.instance.currentUser?.uid;
+    if (uid == null) return;
+    final ids = ejercicios
+        .whereType<Map>()
+        .map((e) => (e['ejercicioId'] ?? '').toString())
+        .where((id) => id.isNotEmpty && id != 'desconocido')
+        .toSet();
+    for (final id in ids) {
+      if (_marcasCache.containsKey(id) || _marcasEnCarga.contains(id)) continue;
+      _marcasEnCarga.add(id);
+      FirebaseFirestore.instance
+          .collection('users')
+          .doc(uid)
+          .collection('marcasPersonales')
+          .doc(id)
+          .get()
+          .then((doc) {
+        final mejor = (doc.data()?['mejorE1rmKg'] as num?)?.toDouble() ?? 0;
+        if (mounted) setState(() => _marcasCache[id] = mejor);
+      }).catchError((_) {
+        if (mounted) setState(() => _marcasCache[id] = 0);
+      });
+    }
+  }
+
   Map<String, double> _intensidadesMusculos(Map<String, dynamic> entreno) {
     final bruto = <String, double>{};
     final ejercicios = entreno['ejercicios'];
     if (ejercicios is! List) return {};
+    _cargarMarcasFaltantes(ejercicios);
     for (final ejercicio in ejercicios) {
       if (ejercicio is! Map) continue;
       final musculos = ejercicio['musculos'];
       if (musculos is! List) continue;
       final series = ejercicio['series'];
       final numSeries = series is List && series.isNotEmpty ? series.length : 1;
-      // Cuánto pesabas de verdad en este ejercicio (1RM ÷ tu peso corporal),
-      // para que levantar mucho cuente más que levantar poco con las mismas
-      // series. Sin datos de peso, cuenta igual que antes (factor 1).
-      final ratio = (ejercicio['ratioPeso'] as num?)?.toDouble() ?? 0;
-      final factorCarga = 1 + ratio;
+      // Lo cerca que has estado de tu propia mejor marca EN ESE EJERCICIO
+      // (no de tu peso corporal, que no es comparable entre ejercicios
+      // distintos: un curl y una sentadilla nunca dan ratios parecidos).
+      // Sin marca histórica todavía (primera vez), cuenta como tu 100%.
+      final ejercicioId = (ejercicio['ejercicioId'] ?? '').toString();
+      final e1rm = (ejercicio['e1rmKg'] as num?)?.toDouble() ?? 0;
+      final mejorHistorico = _marcasCache[ejercicioId];
+      final factorCarga = (mejorHistorico == null || mejorHistorico <= 0)
+          ? 1.0
+          : (e1rm / mejorHistorico).clamp(0.0, 1.0);
       for (final m in musculos) {
         if (m is! Map) continue;
         final id = (m['musculo'] ?? '').toString().trim().toLowerCase();
@@ -365,24 +481,22 @@ class _MusculosEntrenamientoState extends State<MusculosEntrenamiento> {
       }
     }
     if (bruto.isEmpty) return {};
-    final maximo = bruto.values.reduce((a, b) => a > b ? a : b);
-    if (maximo <= 0) return {};
-    return bruto
-        .map((id, valor) => MapEntry(id, (valor / maximo).clamp(0.0, 1.0)));
+    // Escala fija (no relativa al máximo de este entreno): así el mismo
+    // esfuerzo sobre un músculo se ve siempre del mismo color, sea cual sea
+    // el resto de la sesión.
+    return bruto.map((id, valor) =>
+        MapEntry(id, (valor / _referenciaCalor).clamp(0.0, 1.0)));
   }
 
-  /// Degradado de rojos: apenas trabajado → un rosa muy pálido cercano al
-  /// fondo; muy trabajado → rojo intenso. Se aplica una curva (raíz
-  /// cuadrada) para que las diferencias se noten también en la parte baja.
   /// Degradado de calor con 5 paradas: verde (apenas trabajado) → amarillo
-  /// → naranja → rojo → morado (el músculo más trabajado del entreno). Es
-  /// una escala relativa a este entreno, no un aviso médico de sobreentreno.
+  /// → naranja → rojo → granate (mucho volumen directo en este músculo).
+  /// Escala fija, no relativa a cada entreno (ver _referenciaCalor).
   static const List<Color> _paradasCalor = [
     Color(0xFF22C55E), // verde
     Color(0xFFEAB308), // amarillo
     Color(0xFFF97316), // naranja
-    Color(0xFFEF4444), // rojo
-    Color(0xFFA855F7), // morado
+    Color(0xFFDC2626), // rojo
+    Color(0xFF550000), // granate — mucho volumen directo en este músculo
   ];
 
   Color _colorCalor(double intensidad) {
@@ -736,7 +850,11 @@ class _MusculosEntrenamientoState extends State<MusculosEntrenamiento> {
                 ? ''
                 : esEjemplo
                     ? 'Entreno de ejemplo'
-                    : _fechaTexto(entreno['fecha']);
+                    : [
+                        if (_tituloSesion(entreno) != null)
+                          _tituloSesion(entreno)!,
+                        _fechaTexto(entreno['fecha']),
+                      ].join(' · ');
 
             Widget cuerpo;
             if (cargando) {

@@ -95,6 +95,72 @@ class _HistorialEntrenosState extends State<HistorialEntrenos> {
     return '$h:$m';
   }
 
+  static const Map<String, String> _grupoMuscular = {
+    'pectoral_clavicular': 'pecho',
+    'pectoral_esternal': 'pecho',
+    'deltoides_anterior': 'hombro',
+    'deltoides_lateral': 'hombro',
+    'deltoides_posterior': 'hombro',
+    'trapecio': 'hombro',
+    'triceps': 'brazo',
+    'biceps': 'brazo',
+    'antebrazo': 'brazo',
+    'dorsal': 'espalda',
+    'romboides': 'espalda',
+    'lumbar': 'espalda',
+    'abdominal': 'core',
+    'oblicuos': 'core',
+    'gluteo': 'pierna',
+    'cuadriceps': 'pierna',
+    'isquiotibiales': 'pierna',
+    'aductores': 'pierna',
+    'gemelos': 'pierna',
+  };
+
+  static const Map<String, String> _nombreGrupo = {
+    'pecho': 'pecho',
+    'hombro': 'hombros',
+    'brazo': 'brazos',
+    'espalda': 'espalda',
+    'core': 'abdomen',
+    'pierna': 'piernas',
+  };
+
+  /// Igual que en MusculosEntrenamiento: título a partir de qué grupos
+  /// musculares se trabajaron como motor principal.
+  String? _tituloSesion(Map<String, dynamic> datos) {
+    final pesos = <String, double>{};
+    final ejercicios = datos['ejercicios'];
+    if (ejercicios is! List) return null;
+    for (final ejercicio in ejercicios) {
+      if (ejercicio is! Map) continue;
+      final musculos = ejercicio['musculos'];
+      if (musculos is! List) continue;
+      for (final m in musculos) {
+        if (m is! Map) continue;
+        if ((m['rol'] ?? '').toString().toLowerCase() != 'principal') continue;
+        final grupo =
+            _grupoMuscular[(m['musculo'] ?? '').toString().toLowerCase()];
+        if (grupo == null) continue;
+        final peso = (m['peso'] as num?)?.toDouble() ?? 0.5;
+        pesos[grupo] = (pesos[grupo] ?? 0) + peso;
+      }
+    }
+    if (pesos.isEmpty) return null;
+    final total = pesos.values.fold(0.0, (a, b) => a + b);
+    final orden = pesos.entries.toList()
+      ..sort((a, b) => b.value.compareTo(a.value));
+    final top = orden.first;
+    if (orden.length == 1 || top.value / total >= 0.65) {
+      return 'Día de ${_nombreGrupo[top.key]}';
+    }
+    final segundo = orden[1];
+    if ((top.value + segundo.value) / total >= 0.75) {
+      return 'Día de ${_nombreGrupo[top.key]} y ${_nombreGrupo[segundo.key]}';
+    }
+    return 'Entreno de cuerpo completo';
+  }
+
   // ---------- Acciones ----------
 
   Future<void> _abrir(DocumentReference ref, {required bool editar}) async {
@@ -209,6 +275,7 @@ class _HistorialEntrenosState extends State<HistorialEntrenos> {
     final resumen = ejercicios.isEmpty
         ? 'Sin ejercicios registrados'
         : ejercicios.join(', ');
+    final titulo = _tituloSesion(datos) ?? 'Entreno';
 
     double mejorRatio = 0;
     for (final e in (datos['ejercicios'] as List? ?? [])) {
@@ -235,12 +302,16 @@ class _HistorialEntrenosState extends State<HistorialEntrenos> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
+                  Text(titulo,
+                      style: tema.bodyMedium.copyWith(
+                          color: tema.primaryText,
+                          fontWeight: FontWeight.w700)),
+                  const SizedBox(height: 2),
                   Row(
                     children: [
                       Text(hora,
-                          style: tema.bodyMedium.copyWith(
-                              color: tema.primaryText,
-                              fontWeight: FontWeight.w600)),
+                          style: tema.bodySmall
+                              .copyWith(color: tema.secondaryText)),
                       if (abierto) ...[
                         const SizedBox(width: 8),
                         Container(

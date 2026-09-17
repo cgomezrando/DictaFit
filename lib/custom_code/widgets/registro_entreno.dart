@@ -52,6 +52,7 @@ class _EjercicioEdit {
   String pesoBarraTipo;
   List<_SerieEdit> series;
   double e1rmKg;
+  double e1rmPromedioKg;
   double ratioPeso;
   String nivel;
   List<Map<String, dynamic>> musculos;
@@ -64,6 +65,7 @@ class _EjercicioEdit {
     this.pesoBarraTipo = 'total',
     List<_SerieEdit>? series,
     this.e1rmKg = 0,
+    this.e1rmPromedioKg = 0,
     this.ratioPeso = 0,
     this.nivel = '',
     List<Map<String, dynamic>>? musculos,
@@ -84,6 +86,7 @@ class _EjercicioEdit {
               ))
           .toList(),
       e1rmKg: (j['e1rmKg'] as num?)?.toDouble() ?? 0,
+      e1rmPromedioKg: (j['e1rmPromedioKg'] as num?)?.toDouble() ?? 0,
       ratioPeso: (j['ratioPeso'] as num?)?.toDouble() ?? 0,
       nivel: (j['nivel'] ?? '').toString(),
       musculos: ((j['musculos'] as List?) ?? [])
@@ -100,6 +103,7 @@ class _EjercicioEdit {
         'pesoBarraTipo': pesoBarraTipo,
         'series': series.map((s) => {'kg': s.kg, 'reps': s.reps}).toList(),
         'e1rmKg': e1rmKg,
+        'e1rmPromedioKg': e1rmPromedioKg,
         'ratioPeso': ratioPeso,
         'nivel': nivel,
         'musculos': musculos,
@@ -113,6 +117,7 @@ class _EjercicioEdit {
         'pesoBarraTipo': pesoBarraTipo,
         'series': series.map((s) => {'kg': s.kg, 'reps': s.reps}).toList(),
         'e1rmKg': e1rmKg,
+        'e1rmPromedioKg': e1rmPromedioKg,
         'ratioPeso': ratioPeso,
         'nivel': nivel,
         'musculos': musculos,
@@ -580,6 +585,39 @@ class _RegistroEntrenoState extends State<RegistroEntreno> {
   /// Guarda cambios en un entreno concreto que se está editando (desde
   /// Historial), sin tocar su estado ('abierto'/'completo') ni navegar a
   /// WorkoutAnalysis: solo actualiza y vuelve a la pantalla anterior.
+  /// Actualiza tu mejor 1RM histórico por ejercicio (users/{uid}/marcasPersonales),
+  /// solo si el de este entreno lo supera. Se usa en WorkoutAnalysis para
+  /// colorear según lo cerca que estás de tu propia mejor marca en cada
+  /// ejercicio, no de tu peso corporal en bruto (no es comparable entre
+  /// ejercicios). No bloquea el guardado si falla.
+  Future<void> _actualizarMarcasPersonales(
+      List<_EjercicioEdit> ejercicios) async {
+    final uid = FirebaseAuth.instance.currentUser?.uid;
+    if (uid == null) return;
+    final coleccion = FirebaseFirestore.instance
+        .collection('users')
+        .doc(uid)
+        .collection('marcasPersonales');
+    for (final ejercicio in ejercicios) {
+      if (ejercicio.ejercicioId == 'desconocido' || ejercicio.e1rmKg <= 0)
+        continue;
+      try {
+        final ref = coleccion.doc(ejercicio.ejercicioId);
+        final actual = await ref.get();
+        final mejorActual =
+            (actual.data()?['mejorE1rmKg'] as num?)?.toDouble() ?? 0;
+        if (ejercicio.e1rmKg > mejorActual) {
+          await ref.set({
+            'mejorE1rmKg': ejercicio.e1rmKg,
+            'actualizado': FieldValue.serverTimestamp(),
+          }, SetOptions(merge: true));
+        }
+      } catch (_) {
+        // Si falla actualizar una marca, no interrumpe el guardado del entreno.
+      }
+    }
+  }
+
   Future<void> _guardarEdicion() async {
     setState(() => _guardandoAhora = true);
     try {
@@ -616,6 +654,8 @@ class _RegistroEntrenoState extends State<RegistroEntreno> {
         'ejercicios': recalculados.map((e) => e.aFirestore()).toList(),
         'ultimaActualizacion': FieldValue.serverTimestamp(),
       }, SetOptions(merge: true));
+
+      unawaited(_actualizarMarcasPersonales(recalculados));
 
       if (!mounted) return;
       _ultimoGuardadoSerializado = _serializarEstado();
@@ -686,6 +726,8 @@ class _RegistroEntrenoState extends State<RegistroEntreno> {
         await referencia.set(datosEntreno, SetOptions(merge: true));
         if (completar) _entrenoAbiertoRef = null;
       }
+
+      unawaited(_actualizarMarcasPersonales(recalculados));
 
       if (!completar) {
         if (!mounted) return;
