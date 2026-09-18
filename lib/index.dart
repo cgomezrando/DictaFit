@@ -7,3 +7,4 @@ export '/pages/record_workout/record_workout_widget.dart'
     show RecordWorkoutWidget;
 export '/pages/profile/profile_widget.dart' show ProfileWidget;
 export '/pages/history/history_widget.dart' show HistoryWidget;
+export '/pages/statistics/statistics_widget.dart' show StatisticsWidget;

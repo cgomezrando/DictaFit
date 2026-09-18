@@ -1095,7 +1095,7 @@ class _HomeDictaFitState extends State<HomeDictaFit> {
             icono: Icons.bar_chart_rounded,
             texto: 'Estadísticas',
             activo: false,
-            alPulsar: () => _proximamente('Las estadísticas'),
+            alPulsar: () => context.pushNamed('Statistics'),
           ),
           _itemNavegacion(
             icono: Icons.person_rounded,

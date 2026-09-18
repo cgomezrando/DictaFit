@@ -43,6 +43,12 @@ class _MusculosEntrenamientoState extends State<MusculosEntrenamiento> {
   final Map<String, double> _marcasCache = {};
   final Set<String> _marcasEnCarga = {};
 
+  /// Últimos entrenos del usuario, para la regla de "2 para 2" (ver
+  /// _cumplioSesionAnterior). Se cargan una sola vez por apertura de la
+  /// pantalla. null = aún no se ha intentado cargar.
+  List<Map<String, dynamic>>? _entrenosRecientes;
+  bool _cargandoRecientes = false;
+
   static const Map<String, String> _nombres = {
     'pectoral_clavicular': 'Pectoral superior',
     'pectoral_esternal': 'Pectoral inferior',
@@ -155,9 +161,12 @@ class _MusculosEntrenamientoState extends State<MusculosEntrenamiento> {
   }
 
   Widget _filaEjercicio(Map<String, dynamic> ejercicio,
-      {required double pesoCorporal, bool ultima = false}) {
+      {required double pesoCorporal,
+      DateTime? fechaEntreno,
+      bool ultima = false}) {
     final tema = FlutterFlowTheme.of(context);
     final nombre = (ejercicio['nombre'] ?? 'Ejercicio').toString();
+    final ejercicioId = (ejercicio['ejercicioId'] ?? '').toString();
     final nivel = (ejercicio['nivel'] ?? '').toString();
     final cargaPor = (ejercicio['cargaPor'] ?? '').toString();
     final e1rm = (ejercicio['e1rmKg'] as num?)?.toDouble() ?? 0;
@@ -218,17 +227,72 @@ class _MusculosEntrenamientoState extends State<MusculosEntrenamiento> {
               style: tema.bodySmall.copyWith(color: tema.secondaryText),
             ),
             const SizedBox(height: 6),
-            _tablaPesosSugeridos(
-                e1rmPromedio > 0 ? e1rmPromedio : e1rm, cargaPor, pesoCorporal),
+            _tablaPesosSugeridos(series, e1rmPromedio, cargaPor, pesoCorporal,
+                ejercicioId, fechaEntreno),
           ],
         ],
       ),
     );
   }
 
-  /// Peso orientativo para distintas repeticiones, a partir del 1RM
-  /// estimado (fórmula de Epley invertida), adaptado a cómo se carga el
-  /// ejercicio: por mancuerna, el lastre añadido en corporal, o el total.
+  /// Progresión doble (estándar en fuerza: Baechle & Earle, "Essentials of
+  /// Strength Training and Conditioning"): cuando cumples el rango de
+  /// repeticiones objetivo con una serie real, tocaría subir peso la
+  /// próxima vez, no repetirte la misma cifra. Solo cuando NO hay ninguna
+  /// serie real a esas repeticiones se ofrece una estimación a partir del
+  /// 1RM medio, y se marca como tal para no confundirla con un hecho.
+  Map<String, dynamic>? _progresionParaReps(
+    List<Map<String, dynamic>> series,
+    double e1rmPromedio,
+    int repsObjetivo,
+    String cargaPor,
+    double pesoCorporal,
+    String ejercicioId,
+    DateTime? fechaEntreno,
+  ) {
+    double? mejorCumplida;
+    for (final s in series) {
+      final kg = (s['kg'] as num?)?.toDouble();
+      final reps = (s['reps'] as num?)?.toInt();
+      if (reps == null || reps < repsObjetivo) continue;
+      final kgEfectivo = kg ?? (cargaPor == 'corporal' ? 0 : null);
+      if (kgEfectivo == null) continue;
+      if (mejorCumplida == null || kgEfectivo > mejorCumplida)
+        mejorCumplida = kgEfectivo;
+    }
+
+    if (mejorCumplida != null) {
+      final tambienAnterior =
+          _cumplioSesionAnterior(ejercicioId, fechaEntreno, repsObjetivo);
+      return {
+        'cumplido': true,
+        'confirmado': tambienAnterior,
+        'actual': mejorCumplida,
+        'siguiente': _siguientePeso(mejorCumplida, cargaPor),
+      };
+    }
+
+    final estimado =
+        _pesoParaReps(e1rmPromedio, repsObjetivo, cargaPor, pesoCorporal);
+    if (estimado == null) return null;
+    return {'cumplido': false, 'estimado': estimado};
+  }
+
+  /// Siguiente escalón de peso: ~2.5–3 % de subida (guía habitual de
+  /// sobrecarga progresiva), redondeado al incremento práctico más cercano
+  /// según el tipo de carga (discos de 2.5 kg en barra y máquina, pasos de
+  /// 2 kg en mancuernas).
+  double _siguientePeso(double actual, String cargaPor) {
+    final paso = cargaPor == 'mancuerna' ? 2.0 : 2.5;
+    if (actual <= 0) return paso;
+    final subidaMinima = (actual * 0.025).clamp(0.1, double.infinity);
+    final escalones = (subidaMinima / paso).ceil().clamp(1, 1000000);
+    return actual + escalones * paso;
+  }
+
+  /// Peso orientativo para unas repeticiones, a partir del 1RM medio
+  /// (fórmula de Epley invertida). Solo se usa cuando no hay ninguna serie
+  /// real que ya haya cumplido esas repeticiones (ver _progresionParaReps).
   String? _pesoParaReps(
       double e1rm, int reps, String cargaPor, double pesoCorporal) {
     if (e1rm <= 0) return null;
@@ -245,35 +309,56 @@ class _MusculosEntrenamientoState extends State<MusculosEntrenamiento> {
   }
 
   Widget _tablaPesosSugeridos(
-      double e1rm, String cargaPor, double pesoCorporal) {
+    List<Map<String, dynamic>> series,
+    double e1rmPromedio,
+    String cargaPor,
+    double pesoCorporal,
+    String ejercicioId,
+    DateTime? fechaEntreno,
+  ) {
     final tema = FlutterFlowTheme.of(context);
     const objetivos = [8, 12];
-    final celdas = objetivos
-        .map((reps) {
-          final peso = _pesoParaReps(e1rm, reps, cargaPor, pesoCorporal);
-          if (peso == null) return null;
-          return '$reps: $peso';
-        })
-        .whereType<String>()
-        .toList();
+
+    final celdas = <Widget>[];
+    for (final reps in objetivos) {
+      final resultado = _progresionParaReps(series, e1rmPromedio, reps,
+          cargaPor, pesoCorporal, ejercicioId, fechaEntreno);
+      if (resultado == null) continue;
+      final cumplido = resultado['cumplido'] as bool;
+      final confirmado = cumplido && (resultado['confirmado'] as bool);
+
+      final String texto;
+      final Color color;
+      if (confirmado) {
+        // Cumplido dos sesiones seguidas: toca subir (regla "2 para 2").
+        texto =
+            '$reps ✓✓ → ${_numeroCorto(resultado['siguiente'] as double)} kg';
+        color = tema.secondary;
+      } else if (cumplido) {
+        // Cumplido hoy, pero aún no confirmado la sesión anterior: repite
+        // el mismo peso para confirmarlo antes de subir.
+        texto =
+            '$reps ✓ repite (${_numeroCorto(resultado['actual'] as double)} kg)';
+        color = tema.primary;
+      } else {
+        texto = '$reps: ~${resultado['estimado']}';
+        color = tema.secondaryText;
+      }
+
+      celdas.add(Container(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+        decoration: BoxDecoration(
+          color: cumplido ? _tinte(color, 0.14) : tema.primaryBackground,
+          borderRadius: BorderRadius.circular(8),
+          border:
+              Border.all(color: cumplido ? _tinte(color, 0.5) : tema.alternate),
+        ),
+        child: Text(texto, style: tema.bodySmall.copyWith(color: color)),
+      ));
+    }
     if (celdas.isEmpty) return const SizedBox.shrink();
 
-    return Wrap(
-      spacing: 6,
-      runSpacing: 6,
-      children: celdas
-          .map((texto) => Container(
-                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                decoration: BoxDecoration(
-                  color: tema.primaryBackground,
-                  borderRadius: BorderRadius.circular(8),
-                  border: Border.all(color: tema.alternate),
-                ),
-                child: Text(texto,
-                    style: tema.bodySmall.copyWith(color: tema.secondaryText)),
-              ))
-          .toList(),
-    );
+    return Wrap(spacing: 6, runSpacing: 6, children: celdas);
   }
 
   Widget _tarjetaEjercicios(Map<String, dynamic> entreno) {
@@ -283,6 +368,9 @@ class _MusculosEntrenamientoState extends State<MusculosEntrenamiento> {
         .map((e) => Map<String, dynamic>.from(e))
         .toList();
     if (ejercicios.isEmpty) return const SizedBox.shrink();
+    final fechaEntreno = entreno['fecha'] is Timestamp
+        ? (entreno['fecha'] as Timestamp).toDate()
+        : null;
 
     return Container(
       margin: const EdgeInsets.only(bottom: 14),
@@ -303,6 +391,7 @@ class _MusculosEntrenamientoState extends State<MusculosEntrenamiento> {
             _filaEjercicio(ejercicios[i],
                 pesoCorporal:
                     (entreno['pesoCorporalKg'] as num?)?.toDouble() ?? 0,
+                fechaEntreno: fechaEntreno,
                 ultima: i == ejercicios.length - 1),
         ],
       ),
@@ -477,6 +566,73 @@ class _MusculosEntrenamientoState extends State<MusculosEntrenamiento> {
         if (mounted) setState(() => _marcasCache[id] = 0);
       });
     }
+  }
+
+  /// Carga tus últimos entrenos (una sola vez por apertura de la pantalla),
+  /// para poder comprobar la regla de "2 para 2" sin tener que consultar
+  /// Firestore por cada ejercicio: Firestore no permite buscar directamente
+  /// "el entreno anterior que incluyera el ejercicio X" dentro de una lista
+  /// anidada, así que se trae un lote reciente y se filtra aquí.
+  void _cargarEntrenosRecientes() {
+    if (_entrenosRecientes != null || _cargandoRecientes) return;
+    final uid = FirebaseAuth.instance.currentUser?.uid;
+    if (uid == null) return;
+    _cargandoRecientes = true;
+    FirebaseFirestore.instance
+        .collection('users')
+        .doc(uid)
+        .collection('entrenos')
+        .orderBy('fecha', descending: true)
+        .limit(20)
+        .get()
+        .then((snap) {
+      if (!mounted) return;
+      setState(
+          () => _entrenosRecientes = snap.docs.map((d) => d.data()).toList());
+    }).catchError((_) {
+      if (mounted) setState(() => _entrenosRecientes = []);
+    });
+  }
+
+  /// Regla "2 para 2" (Baechle, Earle & Wathen, en Essentials of Strength
+  /// Training and Conditioning, manual de referencia de la NSCA): si superas
+  /// tu objetivo de repeticiones dos sesiones seguidas con ese ejercicio, se
+  /// sube el peso la siguiente vez. Busca, entre tus entrenos recientes, la
+  /// sesión más próxima ANTERIOR a `fechaActual` que incluyera este
+  /// ejercicio, y dice si en ella también llegaste a `repsObjetivo`.
+  bool _cumplioSesionAnterior(
+      String ejercicioId, DateTime? fechaActual, int repsObjetivo) {
+    final recientes = _entrenosRecientes;
+    if (recientes == null || fechaActual == null) return false;
+
+    Map<String, dynamic>? mejorEjercicioAnterior;
+    DateTime? fechaMasReciente;
+    for (final entreno in recientes) {
+      final f = entreno['fecha'];
+      if (f is! Timestamp) continue;
+      final fecha = f.toDate();
+      if (!fecha.isBefore(fechaActual)) continue;
+      if (fechaMasReciente != null && !fecha.isAfter(fechaMasReciente))
+        continue;
+      final ejercicios = entreno['ejercicios'];
+      if (ejercicios is! List) continue;
+      for (final ej in ejercicios) {
+        if (ej is! Map || (ej['ejercicioId'] ?? '').toString() != ejercicioId)
+          continue;
+        fechaMasReciente = fecha;
+        mejorEjercicioAnterior = Map<String, dynamic>.from(ej);
+        break;
+      }
+    }
+    if (mejorEjercicioAnterior == null) return false;
+
+    final series =
+        ((mejorEjercicioAnterior['series'] as List?) ?? []).whereType<Map>();
+    for (final s in series) {
+      final reps = (s['reps'] as num?)?.toInt();
+      if (reps != null && reps >= repsObjetivo) return true;
+    }
+    return false;
   }
 
   /// Intensidad (0 a 1) de cada músculo en este entreno, para el mapa de
@@ -753,6 +909,7 @@ class _MusculosEntrenamientoState extends State<MusculosEntrenamiento> {
 
   Widget _contenido(Map<String, dynamic> entreno) {
     final tema = FlutterFlowTheme.of(context);
+    _cargarEntrenosRecientes();
     final niveles = _nivelesMusculos(entreno);
     final intensidades = _intensidadesMusculos(entreno);
     final principales = niveles.entries

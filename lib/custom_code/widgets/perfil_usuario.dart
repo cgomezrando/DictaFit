@@ -10,8 +10,8 @@ import 'package:flutter/material.dart';
 // Begin custom widget code
 // DO NOT REMOVE OR MODIFY THE CODE ABOVE!
 
-//
 import 'dart:convert';
+import 'dart:math' as math;
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:http/http.dart' as http;
@@ -67,6 +67,9 @@ class _PerfilUsuarioState extends State<PerfilUsuario> {
   final TextEditingController _alturaController = TextEditingController();
   final TextEditingController _pesoController = TextEditingController();
   final TextEditingController _pesoBarraController = TextEditingController();
+  final TextEditingController _cuelloController = TextEditingController();
+  final TextEditingController _cinturaController = TextEditingController();
+  final TextEditingController _caderaController = TextEditingController();
   final TextEditingController _diasEntrenoController = TextEditingController();
 
   String? _sexo;
@@ -77,6 +80,7 @@ class _PerfilUsuarioState extends State<PerfilUsuario> {
   DateTime? _fechaObjetivoPeso;
 
   double _pesoOriginalKg = 0;
+  double _grasaOriginalPct = 0;
   String _email = '';
 
   @override
@@ -91,6 +95,9 @@ class _PerfilUsuarioState extends State<PerfilUsuario> {
     _alturaController.dispose();
     _pesoController.dispose();
     _pesoBarraController.dispose();
+    _cuelloController.dispose();
+    _cinturaController.dispose();
+    _caderaController.dispose();
     _diasEntrenoController.dispose();
     super.dispose();
   }
@@ -122,11 +129,19 @@ class _PerfilUsuarioState extends State<PerfilUsuario> {
       _pesoOriginalKg = (datos['pesoKg'] as num?)?.toDouble() ?? 0;
       _pesoController.text =
           _pesoOriginalKg > 0 ? _formatearNumero(_pesoOriginalKg) : '';
+      _grasaOriginalPct = (datos['grasaCorporalPct'] as num?)?.toDouble() ?? 0;
       _actividad = (datos['actividad'] as String?);
       _objetivo = (datos['objetivo'] as String?);
       _pesoAlimentos = (datos['pesoAlimentos'] as String?);
       _pesoBarraController.text =
           _formatearNumero((datos['pesoBarraKg'] as num?)?.toDouble() ?? 20.0);
+      final cuello = (datos['cuelloCm'] as num?)?.toDouble();
+      final cintura = (datos['cinturaCm'] as num?)?.toDouble();
+      final cadera = (datos['caderaCm'] as num?)?.toDouble();
+      _cuelloController.text = cuello == null ? '' : _formatearNumero(cuello);
+      _cinturaController.text =
+          cintura == null ? '' : _formatearNumero(cintura);
+      _caderaController.text = cadera == null ? '' : _formatearNumero(cadera);
       final dias = (datos['diasEntrenoSemana'] as num?)?.round();
       _diasEntrenoController.text = dias == null ? '' : dias.toString();
       final fechaObj = datos['fechaObjetivoPeso'];
@@ -154,6 +169,40 @@ class _PerfilUsuarioState extends State<PerfilUsuario> {
   int? _leerInt(String texto) {
     final valor = _leerDouble(texto);
     return valor?.round();
+  }
+
+  double _log10(double x) => math.log(x) / math.ln10;
+
+  /// Estimación de grasa corporal con el método de la Marina de EE. UU.
+  /// (Hodgdon & Beckett, 1984), a partir de contornos con cinta métrica.
+  /// En hombres usa cuello y cintura; en mujeres, cuello, cintura y cadera.
+  /// Es una estimación por fórmula, no una medición real (tipo DEXA o
+  /// bioimpedancia), así que solo se calcula con datos completos y válidos.
+  double? _calcularGrasaCorporal() {
+    final alturaCm = _leerInt(_alturaController.text)?.toDouble();
+    final cuello = _leerDouble(_cuelloController.text);
+    final cintura = _leerDouble(_cinturaController.text);
+    if (alturaCm == null || alturaCm <= 0 || cuello == null || cintura == null)
+      return null;
+
+    if (_sexo == 'mujer') {
+      final cadera = _leerDouble(_caderaController.text);
+      if (cadera == null) return null;
+      final base = cintura + cadera - cuello;
+      if (base <= 0) return null;
+      final denom =
+          1.29579 - 0.35004 * _log10(base) + 0.22100 * _log10(alturaCm);
+      if (denom <= 0) return null;
+      final resultado = 495 / denom - 450;
+      return resultado.isFinite ? resultado.clamp(3.0, 60.0) : null;
+    }
+
+    final base = cintura - cuello;
+    if (base <= 0) return null;
+    final denom = 1.0324 - 0.19077 * _log10(base) + 0.15456 * _log10(alturaCm);
+    if (denom <= 0) return null;
+    final resultado = 495 / denom - 450;
+    return resultado.isFinite ? resultado.clamp(3.0, 60.0) : null;
   }
 
   String _formatearNumero(double valor) {
@@ -235,6 +284,9 @@ class _PerfilUsuarioState extends State<PerfilUsuario> {
     final peso = _leerDouble(_pesoController.text);
     final pesoBarra = _leerDouble(_pesoBarraController.text) ?? 20.0;
     final dias = _leerInt(_diasEntrenoController.text);
+    final cuello = _leerDouble(_cuelloController.text);
+    final cintura = _leerDouble(_cinturaController.text);
+    final cadera = _leerDouble(_caderaController.text);
 
     final errores = <String>[];
     if (nombre.isEmpty || nombre.length > 40) errores.add('el nombre');
@@ -251,6 +303,19 @@ class _PerfilUsuarioState extends State<PerfilUsuario> {
       errores.add('el peso de la barra (5–50 kg)');
     if (dias != null && (dias < 0 || dias > 7))
       errores.add('los días de entreno (0–7)');
+    if (_cuelloController.text.trim().isNotEmpty &&
+        (cuello == null || cuello < 20 || cuello > 60)) {
+      errores.add('el contorno de cuello (20–60 cm)');
+    }
+    if (_cinturaController.text.trim().isNotEmpty &&
+        (cintura == null || cintura < 40 || cintura > 200)) {
+      errores.add('el contorno de cintura (40–200 cm)');
+    }
+    if (_sexo == 'mujer' &&
+        _caderaController.text.trim().isNotEmpty &&
+        (cadera == null || cadera < 40 || cadera > 200)) {
+      errores.add('el contorno de cadera (40–200 cm)');
+    }
 
     if (errores.isNotEmpty) {
       _mostrarMensaje('Revisa: ${errores.join(', ')}.');
@@ -259,6 +324,7 @@ class _PerfilUsuarioState extends State<PerfilUsuario> {
 
     setState(() => _estado = _EstadoPerfil.guardando);
     try {
+      final grasaCorporal = _calcularGrasaCorporal();
       final objetivos = calcularObjetivos(
         _sexo!,
         peso!,
@@ -280,18 +346,30 @@ class _PerfilUsuarioState extends State<PerfilUsuario> {
         'pesoBarraKg': pesoBarra,
         'diasEntrenoSemana': dias,
         'fechaObjetivoPeso': _fechaObjetivoPeso,
+        'cuelloCm': cuello,
+        'cinturaCm': cintura,
+        'caderaCm': _sexo == 'mujer' ? cadera : null,
+        'grasaCorporalPct': grasaCorporal != null
+            ? double.parse(grasaCorporal.toStringAsFixed(1))
+            : null,
         'objetivoKcal': objetivos.kcal,
         'objetivoProteinaG': objetivos.proteinaG,
         'objetivoCarbosG': objetivos.carbosG,
         'objetivoGrasaG': objetivos.grasaG,
       }, SetOptions(merge: true));
 
-      if ((peso - _pesoOriginalKg).abs() >= 0.1) {
+      if ((peso - _pesoOriginalKg).abs() >= 0.1 ||
+          (grasaCorporal != null &&
+              (grasaCorporal - _grasaOriginalPct).abs() >= 0.1)) {
         await userRef.collection('pesos').add({
           'fecha': FieldValue.serverTimestamp(),
           'pesoKg': peso,
+          'grasaCorporalPct': grasaCorporal != null
+              ? double.parse(grasaCorporal.toStringAsFixed(1))
+              : null,
         });
         _pesoOriginalKg = peso;
+        _grasaOriginalPct = grasaCorporal ?? _grasaOriginalPct;
       }
 
       if (!mounted) return;
@@ -496,6 +574,7 @@ class _PerfilUsuarioState extends State<PerfilUsuario> {
     TextCapitalization capitalizacion = TextCapitalization.none,
     String? sufijo,
     Color? acento,
+    ValueChanged<String>? onCambiar,
   }) {
     final tema = FlutterFlowTheme.of(context);
     final bloqueado = _estado != _EstadoPerfil.listo;
@@ -508,6 +587,7 @@ class _PerfilUsuarioState extends State<PerfilUsuario> {
       cursorColor: acento ?? tema.primary,
       style: tema.bodyLarge.copyWith(color: tema.primaryText),
       decoration: _decoracionCampo(pista, sufijo: sufijo, acento: acento),
+      onChanged: onCambiar,
     );
   }
 
@@ -789,6 +869,68 @@ class _PerfilUsuarioState extends State<PerfilUsuario> {
             _pildoras(_opcionesPesoAlimentos, _pesoAlimentos, tema.secondary,
                 (v) => setState(() => _pesoAlimentos = v)),
           ]),
+          _tarjeta(
+              titulo: 'Composición corporal',
+              acento: tema.tertiary,
+              hijos: [
+                Text(
+                  'Opcional. Estimación con el método de la Marina de EE. UU. a partir de contornos '
+                  'con cinta métrica; no sustituye una medición real (DEXA, bioimpedancia...).',
+                  style: tema.bodySmall.copyWith(color: tema.secondaryText),
+                ),
+                _etiqueta('Contorno de cuello'),
+                _campoTexto(_cuelloController, 'Por ejemplo, 38',
+                    teclado:
+                        const TextInputType.numberWithOptions(decimal: true),
+                    sufijo: 'cm',
+                    acento: tema.tertiary,
+                    onCambiar: (_) => setState(() {})),
+                _etiqueta('Contorno de cintura'),
+                _campoTexto(_cinturaController, 'A la altura del ombligo',
+                    teclado:
+                        const TextInputType.numberWithOptions(decimal: true),
+                    sufijo: 'cm',
+                    acento: tema.tertiary,
+                    onCambiar: (_) => setState(() {})),
+                if (_sexo == 'mujer') ...[
+                  _etiqueta('Contorno de cadera'),
+                  _campoTexto(_caderaController, 'En el punto más ancho',
+                      teclado:
+                          const TextInputType.numberWithOptions(decimal: true),
+                      sufijo: 'cm',
+                      acento: tema.tertiary,
+                      onCambiar: (_) => setState(() {})),
+                ],
+                Builder(builder: (context) {
+                  final grasa = _calcularGrasaCorporal();
+                  if (grasa == null) return const SizedBox.shrink();
+                  return Padding(
+                    padding: const EdgeInsets.only(top: 16),
+                    child: Container(
+                      padding: const EdgeInsets.all(14),
+                      decoration: BoxDecoration(
+                        color: _tinte(tema.tertiary, 0.14),
+                        borderRadius: BorderRadius.circular(14),
+                      ),
+                      child: Row(
+                        children: [
+                          Icon(Icons.insights_rounded,
+                              color: tema.tertiary, size: 20),
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: Text(
+                              'Grasa corporal estimada: ${grasa.toStringAsFixed(1)} %',
+                              style: tema.bodyMedium.copyWith(
+                                  color: tema.primaryText,
+                                  fontWeight: FontWeight.w600),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  );
+                }),
+              ]),
           _tarjeta(titulo: 'Entrenamiento', acento: tema.primary, hijos: [
             _etiqueta('Peso de la barra por defecto'),
             Text(

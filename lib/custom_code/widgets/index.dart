@@ -6,3 +6,5 @@ export '/custom_code/widgets/musculos_entrenamiento.dart'
 export '/custom_code/widgets/registro_entreno.dart' show RegistroEntreno;
 export '/custom_code/widgets/perfil_usuario.dart' show PerfilUsuario;
 export '/custom_code/widgets/historial_entrenos.dart' show HistorialEntrenos;
+export '/custom_code/widgets/estadisticas_entreno.dart'
+    show EstadisticasEntreno;
