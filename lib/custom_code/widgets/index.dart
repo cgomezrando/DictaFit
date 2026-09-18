@@ -8,3 +8,4 @@ export '/custom_code/widgets/perfil_usuario.dart' show PerfilUsuario;
 export '/custom_code/widgets/historial_entrenos.dart' show HistorialEntrenos;
 export '/custom_code/widgets/estadisticas_entreno.dart'
     show EstadisticasEntreno;
+export '/custom_code/widgets/registro_comida.dart' show RegistroComida;

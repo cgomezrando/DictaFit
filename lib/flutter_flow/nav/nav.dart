@@ -140,6 +140,11 @@ GoRouter createRouter(AppStateNotifier appStateNotifier) => GoRouter(
           name: StatisticsWidget.routeName,
           path: StatisticsWidget.routePath,
           builder: (context, params) => StatisticsWidget(),
+        ),
+        FFRoute(
+          name: RecordMealWidget.routeName,
+          path: RecordMealWidget.routePath,
+          builder: (context, params) => RecordMealWidget(),
         )
       ].map((r) => r.toRoute(appStateNotifier)).toList(),
     );

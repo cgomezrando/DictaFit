@@ -8,3 +8,4 @@ export '/pages/record_workout/record_workout_widget.dart'
 export '/pages/profile/profile_widget.dart' show ProfileWidget;
 export '/pages/history/history_widget.dart' show HistoryWidget;
 export '/pages/statistics/statistics_widget.dart' show StatisticsWidget;
+export '/pages/record_meal/record_meal_widget.dart' show RecordMealWidget;

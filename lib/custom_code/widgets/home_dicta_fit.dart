@@ -288,7 +288,7 @@ class _HomeDictaFitState extends State<HomeDictaFit> {
         context.pushNamed('RecordWorkout');
         break;
       case 'comida':
-        _proximamente('El registro de comidas');
+        context.pushNamed('RecordMeal');
         break;
       case 'intervalos':
         _proximamente('El cronómetro de intervalos');
@@ -1220,8 +1220,8 @@ class _HomeDictaFitState extends State<HomeDictaFit> {
                                       descripcion:
                                           'Cuéntame lo que comes y calculamos calorías y macros.',
                                       textoBoton: 'Ver macros',
-                                      alHablar: () => _proximamente(
-                                          'El registro de comidas'),
+                                      alHablar: () =>
+                                          context.pushNamed('RecordMeal'),
                                       alBoton: () =>
                                           _proximamente('El detalle de macros'),
                                     ),
