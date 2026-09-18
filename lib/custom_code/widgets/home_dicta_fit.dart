@@ -14,6 +14,14 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import '/auth/firebase_auth/auth_util.dart';
 import 'package:flutter_svg/flutter_svg.dart';
+import 'package:health/health.dart';
+import 'dart:async';
+
+/// Si el compilador se queja de que no encuentra 'package:health/health.dart',
+/// añádelo en Custom Pub Dependencies: health: ^11.1.1
+/// Necesita además el permiso NSHealthShareUsageDescription en Info.plist y
+/// la entitlement de HealthKit en Runner.entitlements — pendiente, junto con
+/// lo de "aps-environment", para cuando toques el repositorio.
 
 class HomeDictaFit extends StatefulWidget {
   const HomeDictaFit({
@@ -43,11 +51,18 @@ class _HomeDictaFitState extends State<HomeDictaFit> {
   Stream<QuerySnapshot<Map<String, dynamic>>>? _ultimoEntrenoStream;
   Stream<QuerySnapshot<Map<String, dynamic>>>? _entrenosSemanaStream;
 
+  /// Pasos de hoy leídos de HealthKit. null = todavía no se sabe (cargando,
+  /// sin permiso, o el dispositivo no lo admite); se muestra aparte de
+  /// Firestore para que se vea al instante, sin esperar al guardado.
+  int? _pasosHoy;
+  bool _sinPermisoPasos = false;
+
   @override
   void initState() {
     super.initState();
     final uid = FirebaseAuth.instance.currentUser?.uid;
     if (uid == null) return;
+    unawaited(_sincronizarPasos(uid));
 
     final userRef = FirebaseFirestore.instance.collection('users').doc(uid);
     final ahora = DateTime.now();
@@ -140,6 +155,48 @@ class _HomeDictaFitState extends State<HomeDictaFit> {
         ),
       ),
     );
+  }
+
+  /// Lee tus pasos de hoy (desde medianoche) de HealthKit y los guarda en
+  /// users/{uid}/pasos/{fecha}. No es sincronización en segundo plano de
+  /// verdad: se hace cada vez que abres Home, así que el aviso de las 12:00
+  /// y las 18:00 usará el último dato que hayas subido así, no el pulso
+  /// exacto de ese momento si no tenías la app abierta hace poco.
+  Future<void> _sincronizarPasos(String uid) async {
+    try {
+      final salud = Health();
+      await salud.configure();
+      final autorizado =
+          await salud.requestAuthorization([HealthDataType.STEPS]);
+      if (!autorizado) {
+        if (mounted) setState(() => _sinPermisoPasos = true);
+        return;
+      }
+
+      final ahora = DateTime.now();
+      final medianoche = DateTime(ahora.year, ahora.month, ahora.day);
+      final pasos = await salud.getTotalStepsInInterval(medianoche, ahora);
+      if (pasos == null) return;
+
+      if (mounted) setState(() => _pasosHoy = pasos);
+
+      final fechaId =
+          '${medianoche.year.toString().padLeft(4, '0')}-${medianoche.month.toString().padLeft(2, '0')}-${medianoche.day.toString().padLeft(2, '0')}';
+      await FirebaseFirestore.instance
+          .collection('users')
+          .doc(uid)
+          .collection('pasos')
+          .doc(fechaId)
+          .set({
+        'fecha': Timestamp.fromDate(medianoche),
+        'totalPasos': pasos,
+        'actualizado': FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true));
+    } catch (_) {
+      // Sin HealthKit disponible (simulador, permiso denegado del todo,
+      // dispositivo bloqueado): no rompe Home, solo no se muestra el dato.
+      if (mounted) setState(() => _sinPermisoPasos = true);
+    }
   }
 
   void _proximamente(String funcion) {
@@ -588,6 +645,64 @@ class _HomeDictaFitState extends State<HomeDictaFit> {
           ),
         ),
       ],
+    );
+  }
+
+  Widget _tarjetaPasos(int objetivo) {
+    final tema = FlutterFlowTheme.of(context);
+    final pasos = _pasosHoy;
+    final progreso = pasos == null || objetivo <= 0
+        ? 0.0
+        : (pasos / objetivo).clamp(0.0, 1.0);
+
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: _decoracionTarjeta(tema.secondary, intensidad: 0.08),
+      child: Row(
+        children: [
+          Icon(Icons.directions_walk_rounded, color: tema.secondary, size: 22),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Text('Pasos de hoy',
+                        style: tema.bodyMedium.copyWith(
+                            color: tema.primaryText,
+                            fontWeight: FontWeight.w600)),
+                    const Spacer(),
+                    if (pasos != null)
+                      Text('$pasos / $objetivo',
+                          style: tema.bodyMedium.copyWith(
+                              color: tema.secondary,
+                              fontWeight: FontWeight.w700)),
+                  ],
+                ),
+                const SizedBox(height: 8),
+                if (pasos == null)
+                  Text(
+                    _sinPermisoPasos
+                        ? 'Sin acceso a Salud. Puedes activarlo en Ajustes → Privacidad → Salud.'
+                        : 'Leyendo tus pasos de hoy...',
+                    style: tema.bodySmall.copyWith(color: tema.secondaryText),
+                  )
+                else
+                  ClipRRect(
+                    borderRadius: BorderRadius.circular(999),
+                    child: LinearProgressIndicator(
+                      value: progreso,
+                      minHeight: 6,
+                      backgroundColor: tema.alternate,
+                      valueColor: AlwaysStoppedAnimation(tema.secondary),
+                    ),
+                  ),
+              ],
+            ),
+          ),
+        ],
+      ),
     );
   }
 
@@ -1190,6 +1305,8 @@ class _HomeDictaFitState extends State<HomeDictaFit> {
           final objetivoProteina = _numero(usuario['objetivoProteinaG']);
           final objetivoCarbos = _numero(usuario['objetivoCarbosG']);
           final objetivoGrasa = _numero(usuario['objetivoGrasaG']);
+          final objetivoPasos =
+              (usuario['objetivoPasos'] as num?)?.toInt() ?? 10000;
 
           return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
             stream: _comidasHoyStream,
@@ -1261,6 +1378,8 @@ class _HomeDictaFitState extends State<HomeDictaFit> {
                                       grasa: grasa,
                                       objetivoGrasa: objetivoGrasa,
                                     ),
+                                    const SizedBox(height: 14),
+                                    _tarjetaPasos(objetivoPasos),
                                     const SizedBox(height: 14),
                                     _tarjetaFuncion(
                                       icono: Icons.fitness_center_rounded,

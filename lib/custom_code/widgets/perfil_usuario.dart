@@ -71,6 +71,8 @@ class _PerfilUsuarioState extends State<PerfilUsuario> {
   final TextEditingController _cinturaController = TextEditingController();
   final TextEditingController _caderaController = TextEditingController();
   final TextEditingController _diasEntrenoController = TextEditingController();
+  final TextEditingController _objetivoPasosController =
+      TextEditingController();
 
   String? _sexo;
   DateTime? _fechaNacimiento;
@@ -99,6 +101,7 @@ class _PerfilUsuarioState extends State<PerfilUsuario> {
     _cinturaController.dispose();
     _caderaController.dispose();
     _diasEntrenoController.dispose();
+    _objetivoPasosController.dispose();
     super.dispose();
   }
 
@@ -144,6 +147,8 @@ class _PerfilUsuarioState extends State<PerfilUsuario> {
       _caderaController.text = cadera == null ? '' : _formatearNumero(cadera);
       final dias = (datos['diasEntrenoSemana'] as num?)?.round();
       _diasEntrenoController.text = dias == null ? '' : dias.toString();
+      final objetivoPasos = (datos['objetivoPasos'] as num?)?.toInt() ?? 10000;
+      _objetivoPasosController.text = objetivoPasos.toString();
       final fechaObj = datos['fechaObjetivoPeso'];
       _fechaObjetivoPeso = fechaObj is Timestamp ? fechaObj.toDate() : null;
 
@@ -284,6 +289,7 @@ class _PerfilUsuarioState extends State<PerfilUsuario> {
     final peso = _leerDouble(_pesoController.text);
     final pesoBarra = _leerDouble(_pesoBarraController.text) ?? 20.0;
     final dias = _leerInt(_diasEntrenoController.text);
+    final objetivoPasos = _leerInt(_objetivoPasosController.text) ?? 10000;
     final cuello = _leerDouble(_cuelloController.text);
     final cintura = _leerDouble(_cinturaController.text);
     final cadera = _leerDouble(_caderaController.text);
@@ -303,6 +309,8 @@ class _PerfilUsuarioState extends State<PerfilUsuario> {
       errores.add('el peso de la barra (5–50 kg)');
     if (dias != null && (dias < 0 || dias > 7))
       errores.add('los días de entreno (0–7)');
+    if (objetivoPasos < 1000 || objetivoPasos > 50000)
+      errores.add('el objetivo de pasos (1.000–50.000)');
     if (_cuelloController.text.trim().isNotEmpty &&
         (cuello == null || cuello < 20 || cuello > 60)) {
       errores.add('el contorno de cuello (20–60 cm)');
@@ -345,6 +353,7 @@ class _PerfilUsuarioState extends State<PerfilUsuario> {
         'pesoAlimentos': _pesoAlimentos,
         'pesoBarraKg': pesoBarra,
         'diasEntrenoSemana': dias,
+        'objetivoPasos': objetivoPasos,
         'fechaObjetivoPeso': _fechaObjetivoPeso,
         'cuelloCm': cuello,
         'cinturaCm': cintura,
@@ -833,6 +842,9 @@ class _PerfilUsuarioState extends State<PerfilUsuario> {
                 _etiqueta('Días de entreno a la semana'),
                 _campoTexto(_diasEntrenoController, 'Por ejemplo, 4',
                     teclado: TextInputType.number),
+                _etiqueta('Objetivo de pasos diarios'),
+                _campoTexto(_objetivoPasosController, 'Por ejemplo, 10000',
+                    teclado: TextInputType.number, sufijo: 'pasos'),
                 _etiqueta('Fecha objetivo del peso (opcional)'),
                 Row(
                   children: [
