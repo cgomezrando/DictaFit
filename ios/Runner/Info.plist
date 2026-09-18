@@ -16,7 +16,8 @@
 	<string>DictaFit Gym y Dieta por Voz</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
-
+<key>NSHealthShareUsageDescription</key>
+<string>DictaFit necesita acceso a Salud para leer tus pasos y mostrar tu progreso diario.</string>
 	<key>CFBundleShortVersionString</key>
 	<string>$(FLUTTER_BUILD_NAME)</string>
 	<key>CFBundleSignature</key>
