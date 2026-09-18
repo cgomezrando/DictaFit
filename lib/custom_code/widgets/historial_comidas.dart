@@ -91,6 +91,19 @@ class _HistorialComidasState extends State<HistorialComidas> {
     return '$h:$m';
   }
 
+  static const List<String> _tiposComida = [
+    'desayuno',
+    'comida',
+    'cena',
+    'fuera_de_hora'
+  ];
+  static const Map<String, String> _nombreTipoComida = {
+    'desayuno': 'Desayuno',
+    'comida': 'Comida',
+    'cena': 'Cena',
+    'fuera_de_hora': 'Fuera de hora',
+  };
+
   // ---------- Acciones ----------
 
   Future<void> _abrir(DocumentReference ref) async {
@@ -194,12 +207,27 @@ class _HistorialComidasState extends State<HistorialComidas> {
     final fecha = datos['fecha'];
     final hora = fecha is Timestamp ? _hora(fecha.toDate()) : '';
     final abierto = (datos['estado'] ?? 'completo') == 'abierto';
-    final alimentos = ((datos['alimentos'] as List?) ?? [])
-        .whereType<Map>()
+    final alimentosCrudos =
+        ((datos['alimentos'] as List?) ?? []).whereType<Map>().toList();
+    final alimentos = alimentosCrudos
         .map((a) => (a['nombre'] ?? 'Alimento').toString())
         .toList();
-    final resumen =
-        alimentos.isEmpty ? 'Sin alimentos registrados' : alimentos.join(', ');
+    // Un mismo día puede tener desayuno, comida y cena en la misma tarjeta
+    // (es una sola comida abierta que va acumulando), así que se agrupa por
+    // tipo en vez de listar todo junto.
+    final porTipo = <String, List<String>>{};
+    for (final a in alimentosCrudos) {
+      final tipo = (a['tipo'] ?? 'fuera_de_hora').toString();
+      porTipo
+          .putIfAbsent(tipo, () => [])
+          .add((a['nombre'] ?? 'Alimento').toString());
+    }
+    final resumen = porTipo.isEmpty
+        ? 'Sin alimentos registrados'
+        : _tiposComida
+            .where((t) => porTipo.containsKey(t))
+            .map((t) => '${_nombreTipoComida[t]}: ${porTipo[t]!.join(', ')}')
+            .join('   ·   ');
     final kcal = (datos['kcal'] as num?)?.toDouble() ?? 0;
 
     return Container(

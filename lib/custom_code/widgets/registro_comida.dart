@@ -49,6 +49,11 @@ class _AlimentoEdit {
   bool supuesto;
   String notaSupuesto;
 
+  /// 'desayuno' | 'comida' | 'cena' | 'fuera_de_hora'. Se calcula solo, a
+  /// partir de la hora en que se dicta, y se puede corregir a mano (ver
+  /// _detectarTipoComida y el selector en la pantalla de confirmación).
+  String tipo;
+
   _AlimentoEdit({
     required this.alimentoId,
     required this.nombre,
@@ -63,6 +68,7 @@ class _AlimentoEdit {
     this.grasaG = 0,
     this.supuesto = false,
     this.notaSupuesto = '',
+    this.tipo = 'fuera_de_hora',
   });
 
   factory _AlimentoEdit.desdeJson(Map<String, dynamic> j) {
@@ -80,9 +86,12 @@ class _AlimentoEdit {
       grasaG: (j['grasaG'] as num?)?.toDouble() ?? 0,
       supuesto: j['supuesto'] == true,
       notaSupuesto: (j['notaSupuesto'] ?? '').toString(),
+      tipo: (j['tipo'] ?? 'fuera_de_hora').toString(),
     );
   }
 
+  /// Solo los campos que entiende el backend (el cálculo de kcal/macros no
+  /// necesita saber el tipo de comida).
   Map<String, dynamic> aPeticion() => {
         'alimentoId': alimentoId,
         'nombre': nombre,
@@ -99,7 +108,7 @@ class _AlimentoEdit {
         'notaSupuesto': notaSupuesto,
       };
 
-  Map<String, dynamic> aFirestore() => aPeticion();
+  Map<String, dynamic> aFirestore() => {...aPeticion(), 'tipo': tipo};
 }
 
 class _ErrorApi implements Exception {
@@ -112,6 +121,31 @@ class _ItemCatalogo {
   final String id;
   final String nombre;
   _ItemCatalogo(this.id, this.nombre);
+}
+
+const List<String> _tiposComida = [
+  'desayuno',
+  'comida',
+  'cena',
+  'fuera_de_hora'
+];
+const Map<String, String> _nombreTipoComida = {
+  'desayuno': 'Desayuno',
+  'comida': 'Comida',
+  'cena': 'Cena',
+  'fuera_de_hora': 'Fuera de hora',
+};
+
+/// Desayuno 6:00–11:00, comida 11:00–16:00, cena 20:00–24:00; cualquier otra
+/// hora (media mañana, la merienda, la madrugada) cae en "fuera de hora".
+/// Es solo un punto de partida: el usuario puede corregirlo tocando la
+/// etiqueta del grupo en la pantalla de confirmación.
+String _detectarTipoComida() {
+  final h = DateTime.now().hour;
+  if (h >= 6 && h < 11) return 'desayuno';
+  if (h >= 11 && h < 16) return 'comida';
+  if (h >= 20 && h < 24) return 'cena';
+  return 'fuera_de_hora';
 }
 
 class RegistroComida extends StatefulWidget {
@@ -497,6 +531,12 @@ class _RegistroComidaState extends State<RegistroComida> {
           .map((a) =>
               _AlimentoEdit.desdeJson(Map<String, dynamic>.from(a as Map)))
           .toList();
+      // El backend no sabe de tipos de comida: se etiqueta aquí, con la
+      // hora actual, todo lo que viene de este mismo dictado.
+      final tipoDeEsteBloque = _detectarTipoComida();
+      for (final a in alimentosNuevos) {
+        a.tipo = tipoDeEsteBloque;
+      }
       final avisosNuevos =
           ((json['avisos'] as List?) ?? []).map((a) => a.toString()).toList();
       final transcripcionNueva = (json['transcripcion'] ?? texto).toString();
@@ -539,6 +579,12 @@ class _RegistroComidaState extends State<RegistroComida> {
           .map((a) =>
               _AlimentoEdit.desdeJson(Map<String, dynamic>.from(a as Map)))
           .toList();
+      // El backend no devuelve 'tipo' (no lo conoce): se reengancha aquí,
+      // por posición, ya que /v1/comida/calcular respeta el orden y el
+      // número de elementos que se le mandan.
+      for (var i = 0; i < recalculados.length && i < _alimentos.length; i++) {
+        recalculados[i].tipo = _alimentos[i].tipo;
+      }
       final avisos =
           ((json['avisos'] as List?) ?? []).map((a) => a.toString()).toList();
 
@@ -592,6 +638,12 @@ class _RegistroComidaState extends State<RegistroComida> {
           .map((a) =>
               _AlimentoEdit.desdeJson(Map<String, dynamic>.from(a as Map)))
           .toList();
+      // El backend no devuelve 'tipo' (no lo conoce): se reengancha aquí,
+      // por posición, ya que /v1/comida/calcular respeta el orden y el
+      // número de elementos que se le mandan.
+      for (var i = 0; i < recalculados.length && i < _alimentos.length; i++) {
+        recalculados[i].tipo = _alimentos[i].tipo;
+      }
       final avisos =
           ((json['avisos'] as List?) ?? []).map((a) => a.toString()).toList();
 
@@ -745,7 +797,10 @@ class _RegistroComidaState extends State<RegistroComida> {
 
   void _agregarAlimentoVacio() {
     setState(() => _alimentos.add(_AlimentoEdit(
-        alimentoId: 'desconocido', nombre: 'Nuevo alimento', gramos: 100)));
+        alimentoId: 'desconocido',
+        nombre: 'Nuevo alimento',
+        gramos: 100,
+        tipo: _detectarTipoComida())));
   }
 
   Future<void> _elegirAlimento(int indice) async {
@@ -1327,6 +1382,83 @@ class _RegistroComidaState extends State<RegistroComida> {
     );
   }
 
+  /// Agrupa los alimentos por tipo de comida (desayuno/comida/cena/fuera de
+  /// hora), en ese orden fijo, cada grupo con su etiqueta tocable.
+  List<Widget> _seccionesAgrupadas() {
+    final indicesPorTipo = <String, List<int>>{};
+    for (var i = 0; i < _alimentos.length; i++) {
+      indicesPorTipo.putIfAbsent(_alimentos[i].tipo, () => []).add(i);
+    }
+    final widgets = <Widget>[];
+    for (final tipo in _tiposComida) {
+      final indices = indicesPorTipo[tipo];
+      if (indices == null || indices.isEmpty) continue;
+      widgets.add(_cabeceraGrupo(tipo));
+      widgets.addAll(indices.map((i) => _tarjetaAlimento(i)));
+    }
+    return widgets;
+  }
+
+  Widget _cabeceraGrupo(String tipo) {
+    final tema = FlutterFlowTheme.of(context);
+    return Padding(
+      padding: const EdgeInsets.only(top: 6, bottom: 8),
+      child: GestureDetector(
+        onTap: () => _elegirTipoParaGrupo(tipo),
+        behavior: HitTestBehavior.opaque,
+        child: Row(
+          children: [
+            Text(_nombreTipoComida[tipo] ?? tipo,
+                style: tema.titleSmall.copyWith(
+                    color: tema.primaryText, fontWeight: FontWeight.w700)),
+            const SizedBox(width: 6),
+            Icon(Icons.unfold_more_rounded,
+                size: 16, color: tema.secondaryText),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// Cambia el tipo de TODOS los alimentos que ahora mismo están en el grupo
+  /// `tipoActual` (por ejemplo, si dictaste el desayuno tarde y quieres
+  /// pasarlo de "Fuera de hora" a "Desayuno").
+  Future<void> _elegirTipoParaGrupo(String tipoActual) async {
+    final tema = FlutterFlowTheme.of(context);
+    final elegido = await showModalBottomSheet<String>(
+      context: context,
+      backgroundColor: tema.secondaryBackground,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      builder: (ctx) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.symmetric(vertical: 8),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: _tiposComida
+                .map((t) => ListTile(
+                      title: Text(_nombreTipoComida[t]!,
+                          style: TextStyle(color: tema.primaryText)),
+                      trailing: t == tipoActual
+                          ? Icon(Icons.check_rounded, color: tema.primary)
+                          : null,
+                      onTap: () => Navigator.of(ctx).pop(t),
+                    ))
+                .toList(),
+          ),
+        ),
+      ),
+    );
+    if (elegido != null && elegido != tipoActual) {
+      setState(() {
+        for (final a in _alimentos) {
+          if (a.tipo == tipoActual) a.tipo = elegido;
+        }
+      });
+    }
+  }
+
   Widget _vistaConfirmacion() {
     final tema = FlutterFlowTheme.of(context);
     return Column(
@@ -1371,7 +1503,7 @@ class _RegistroComidaState extends State<RegistroComida> {
                 ],
                 const SizedBox(height: 16),
                 if (_alimentos.isNotEmpty) _resumenTotales(),
-                ..._alimentos.asMap().keys.map((i) => _tarjetaAlimento(i)),
+                ..._seccionesAgrupadas(),
                 Row(
                   children: [
                     Expanded(

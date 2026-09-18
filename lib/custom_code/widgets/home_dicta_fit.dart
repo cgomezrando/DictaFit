@@ -216,6 +216,56 @@ class _HomeDictaFitState extends State<HomeDictaFit> {
     );
   }
 
+  Widget _svgFilete(double tamano, Color color) {
+    final hexColor = color.value.toRadixString(16).padLeft(8, '0');
+    final hexColorFormatted = '#${hexColor.substring(2)}';
+    return SizedBox(
+      width: tamano,
+      height: tamano,
+      child: SvgPicture.string(
+        '''<svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">
+          <g stroke="$hexColorFormatted" stroke-width="4.5" fill="none" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M 14 58
+                     Q 10 42, 22 30
+                     Q 30 18, 46 14
+                     Q 64 9, 80 20
+                     Q 92 28, 91 44
+                     Q 90 58, 80 66
+                     Q 84 76, 74 82
+                     Q 62 89, 48 84
+                     Q 34 90, 22 80
+                     Q 12 72, 14 58 Z"/>
+            <circle cx="42" cy="42" r="9"/>
+          </g>
+        </svg>''',
+      ),
+    );
+  }
+
+  Widget _svgCereal(double tamano, Color color) {
+    final hexColor = color.value.toRadixString(16).padLeft(8, '0');
+    final hexColorFormatted = '#${hexColor.substring(2)}';
+    return SizedBox(
+      width: tamano,
+      height: tamano,
+      child: SvgPicture.string(
+        '''<svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">
+          <g stroke="$hexColorFormatted" stroke-width="4.5" fill="none" stroke-linecap="round" stroke-linejoin="round">
+            <line x1="50" y1="92" x2="50" y2="14"/>
+            <path d="M 50 18 Q 40 8, 33 16"/>
+            <path d="M 50 18 Q 60 8, 67 16"/>
+            <path d="M 50 34 Q 38 26, 30 36"/>
+            <path d="M 50 34 Q 62 26, 70 36"/>
+            <path d="M 50 50 Q 38 42, 30 52"/>
+            <path d="M 50 50 Q 62 42, 70 52"/>
+            <path d="M 50 66 Q 40 59, 34 68"/>
+            <path d="M 50 66 Q 60 59, 66 68"/>
+          </g>
+        </svg>''',
+      ),
+    );
+  }
+
   // ---------- Acciones ----------
 
   Future<void> _cerrarSesion() async {
@@ -475,7 +525,8 @@ class _HomeDictaFitState extends State<HomeDictaFit> {
   }
 
   Widget _metrica({
-    required IconData icono,
+    IconData? icono,
+    Widget? iconoWidget,
     required Color acento,
     required String titulo,
     required double valor,
@@ -491,7 +542,7 @@ class _HomeDictaFitState extends State<HomeDictaFit> {
       children: [
         Row(
           children: [
-            Icon(icono, size: 16, color: acento),
+            iconoWidget ?? Icon(icono, size: 16, color: acento),
             const SizedBox(width: 5),
             Flexible(
               child: Text(
@@ -587,7 +638,7 @@ class _HomeDictaFitState extends State<HomeDictaFit> {
               const SizedBox(width: 18),
               Expanded(
                 child: _metrica(
-                  icono: Icons.kebab_dining_rounded,
+                  iconoWidget: _svgFilete(16, tema.secondary),
                   acento: tema.secondary,
                   titulo: 'Proteínas',
                   valor: proteina,
@@ -602,7 +653,7 @@ class _HomeDictaFitState extends State<HomeDictaFit> {
             children: [
               Expanded(
                 child: _metrica(
-                  icono: Icons.bakery_dining_rounded,
+                  iconoWidget: _svgCereal(16, tema.tertiary),
                   acento: tema.tertiary,
                   titulo: 'Carbos',
                   valor: carbos,
