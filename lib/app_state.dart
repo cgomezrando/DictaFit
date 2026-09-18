@@ -29,4 +29,10 @@ class FFAppState extends ChangeNotifier {
   set entrenoGuardadoRef(DocumentReference? value) {
     _entrenoGuardadoRef = value;
   }
+
+  DocumentReference? _comidaGuardadaRef;
+  DocumentReference? get comidaGuardadaRef => _comidaGuardadaRef;
+  set comidaGuardadaRef(DocumentReference? value) {
+    _comidaGuardadaRef = value;
+  }
 }

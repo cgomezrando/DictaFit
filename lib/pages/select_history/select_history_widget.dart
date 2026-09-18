@@ -3,37 +3,31 @@ import '/flutter_flow/flutter_flow_util.dart';
 import '/flutter_flow/flutter_flow_widgets.dart';
 import '/custom_code/widgets/index.dart' as custom_widgets;
 import '/index.dart';
-import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:provider/provider.dart';
-import 'record_meal_model.dart';
-export 'record_meal_model.dart';
+import 'select_history_model.dart';
+export 'select_history_model.dart';
 
-class RecordMealWidget extends StatefulWidget {
-  const RecordMealWidget({
-    super.key,
-    this.comidaParaEditar,
-  });
+class SelectHistoryWidget extends StatefulWidget {
+  const SelectHistoryWidget({super.key});
 
-  final DocumentReference? comidaParaEditar;
-
-  static String routeName = 'RecordMeal';
-  static String routePath = '/recordMeal';
+  static String routeName = 'SelectHistory';
+  static String routePath = '/selectHistory';
 
   @override
-  State<RecordMealWidget> createState() => _RecordMealWidgetState();
+  State<SelectHistoryWidget> createState() => _SelectHistoryWidgetState();
 }
 
-class _RecordMealWidgetState extends State<RecordMealWidget> {
-  late RecordMealModel _model;
+class _SelectHistoryWidgetState extends State<SelectHistoryWidget> {
+  late SelectHistoryModel _model;
 
   final scaffoldKey = GlobalKey<ScaffoldState>();
 
   @override
   void initState() {
     super.initState();
-    _model = createModel(context, () => RecordMealModel());
+    _model = createModel(context, () => SelectHistoryModel());
   }
 
   @override
@@ -56,15 +50,14 @@ class _RecordMealWidgetState extends State<RecordMealWidget> {
         body: Container(
           width: double.infinity,
           height: double.infinity,
-          child: custom_widgets.RegistroComida(
+          child: custom_widgets.ElegirHistorial(
             width: double.infinity,
             height: double.infinity,
-            comidaParaEditar: widget!.comidaParaEditar,
-            onGuardado: () async {
-              if (Navigator.of(context).canPop()) {
-                context.pop();
-              }
-              context.pushNamed(HomeWidget.routeName);
+            onEntrenos: () async {
+              context.pushNamed(HistoryWidget.routeName);
+            },
+            onComidas: () async {
+              context.pushNamed(MealHistoryWidget.routeName);
             },
           ),
         ),

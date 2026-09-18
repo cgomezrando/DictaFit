@@ -547,15 +547,10 @@ class _HomeDictaFitState extends State<HomeDictaFit> {
     required double objetivoProteina,
     required double carbos,
     required double objetivoCarbos,
+    required double grasa,
+    required double objetivoGrasa,
   }) {
     final tema = FlutterFlowTheme.of(context);
-
-    Widget separador() => Container(
-          width: 1,
-          height: 56,
-          margin: const EdgeInsets.symmetric(horizontal: 12),
-          color: tema.alternate,
-        );
 
     return Container(
       padding: const EdgeInsets.fromLTRB(16, 16, 16, 18),
@@ -576,7 +571,7 @@ class _HomeDictaFitState extends State<HomeDictaFit> {
               ),
             ],
           ),
-          const SizedBox(height: 14),
+          const SizedBox(height: 16),
           Row(
             children: [
               Expanded(
@@ -589,10 +584,10 @@ class _HomeDictaFitState extends State<HomeDictaFit> {
                   unidad: '',
                 ),
               ),
-              separador(),
+              const SizedBox(width: 18),
               Expanded(
                 child: _metrica(
-                  icono: Icons.bolt_rounded,
+                  icono: Icons.kebab_dining_rounded,
                   acento: tema.secondary,
                   titulo: 'Proteínas',
                   valor: proteina,
@@ -600,14 +595,29 @@ class _HomeDictaFitState extends State<HomeDictaFit> {
                   unidad: 'g',
                 ),
               ),
-              separador(),
+            ],
+          ),
+          const SizedBox(height: 18),
+          Row(
+            children: [
               Expanded(
                 child: _metrica(
-                  icono: Icons.grain_rounded,
+                  icono: Icons.bakery_dining_rounded,
                   acento: tema.tertiary,
                   titulo: 'Carbos',
                   valor: carbos,
                   objetivo: objetivoCarbos,
+                  unidad: 'g',
+                ),
+              ),
+              const SizedBox(width: 18),
+              Expanded(
+                child: _metrica(
+                  icono: Icons.water_drop_rounded,
+                  acento: tema.error,
+                  titulo: 'Grasas',
+                  valor: grasa,
+                  objetivo: objetivoGrasa,
                   unidad: 'g',
                 ),
               ),
@@ -1045,7 +1055,7 @@ class _HomeDictaFitState extends State<HomeDictaFit> {
             icono: Icons.history_rounded,
             texto: 'Historial',
             activo: false,
-            alPulsar: () => context.pushNamed('History'),
+            alPulsar: () => context.pushNamed('SelectHistory'),
           ),
           SizedBox(
             width: 76,
@@ -1128,6 +1138,7 @@ class _HomeDictaFitState extends State<HomeDictaFit> {
           final objetivoKcal = _numero(usuario['objetivoKcal']);
           final objetivoProteina = _numero(usuario['objetivoProteinaG']);
           final objetivoCarbos = _numero(usuario['objetivoCarbosG']);
+          final objetivoGrasa = _numero(usuario['objetivoGrasaG']);
 
           return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
             stream: _comidasHoyStream,
@@ -1135,12 +1146,14 @@ class _HomeDictaFitState extends State<HomeDictaFit> {
               double kcal = 0;
               double proteina = 0;
               double carbos = 0;
+              double grasa = 0;
               final comidas = snapComidas.data?.docs ?? [];
               for (final doc in comidas) {
                 final datos = doc.data();
                 kcal += _numero(datos['kcal']);
                 proteina += _numero(datos['proteinaG']);
                 carbos += _numero(datos['carbosG']);
+                grasa += _numero(datos['grasaG']);
               }
 
               return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
@@ -1194,6 +1207,8 @@ class _HomeDictaFitState extends State<HomeDictaFit> {
                                       objetivoProteina: objetivoProteina,
                                       carbos: carbos,
                                       objetivoCarbos: objetivoCarbos,
+                                      grasa: grasa,
+                                      objetivoGrasa: objetivoGrasa,
                                     ),
                                     const SizedBox(height: 14),
                                     _tarjetaFuncion(

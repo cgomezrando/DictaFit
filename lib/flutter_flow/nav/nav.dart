@@ -144,7 +144,24 @@ GoRouter createRouter(AppStateNotifier appStateNotifier) => GoRouter(
         FFRoute(
           name: RecordMealWidget.routeName,
           path: RecordMealWidget.routePath,
-          builder: (context, params) => RecordMealWidget(),
+          builder: (context, params) => RecordMealWidget(
+            comidaParaEditar: params.getParam(
+              'comidaParaEditar',
+              ParamType.DocumentReference,
+              isList: false,
+              collectionNamePath: ['users', 'comidas'],
+            ),
+          ),
+        ),
+        FFRoute(
+          name: SelectHistoryWidget.routeName,
+          path: SelectHistoryWidget.routePath,
+          builder: (context, params) => SelectHistoryWidget(),
+        ),
+        FFRoute(
+          name: MealHistoryWidget.routeName,
+          path: MealHistoryWidget.routePath,
+          builder: (context, params) => MealHistoryWidget(),
         )
       ].map((r) => r.toRoute(appStateNotifier)).toList(),
     );

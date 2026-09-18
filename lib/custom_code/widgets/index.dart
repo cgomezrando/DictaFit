@@ -9,3 +9,5 @@ export '/custom_code/widgets/historial_entrenos.dart' show HistorialEntrenos;
 export '/custom_code/widgets/estadisticas_entreno.dart'
     show EstadisticasEntreno;
 export '/custom_code/widgets/registro_comida.dart' show RegistroComida;
+export '/custom_code/widgets/elegir_historial.dart' show ElegirHistorial;
+export '/custom_code/widgets/historial_comidas.dart' show HistorialComidas;

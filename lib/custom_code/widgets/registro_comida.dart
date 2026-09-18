@@ -120,6 +120,7 @@ class RegistroComida extends StatefulWidget {
     this.width,
     this.height,
     required this.onGuardado,
+    this.comidaParaEditar,
   });
 
   final double? width;
@@ -129,6 +130,11 @@ class RegistroComida extends StatefulWidget {
   /// FlutterFlow puede simplemente volver a Home (Replace Route); todavía
   /// no hay una pantalla de análisis nutricional a la que navegar.
   final Future Function() onGuardado;
+
+  /// Si se indica, el widget abre directamente esta comida para editarla
+  /// (desde Historial), en vez de buscar o crear la comida abierta del día.
+  /// Al guardar, solo se actualizan sus datos y se vuelve atrás.
+  final DocumentReference? comidaParaEditar;
 
   @override
   State<RegistroComida> createState() => _RegistroComidaState();
@@ -149,6 +155,10 @@ class _RegistroComidaState extends State<RegistroComida> {
   /// 'crudo' o 'cocinado', de Perfil. Decide qué variante del catálogo usar
   /// por defecto cuando un alimento tiene las dos.
   String _pesoAlimentos = 'cocinado';
+
+  /// True cuando el widget se abrió para editar una comida ya guardada
+  /// (desde Historial), en vez de continuar la comida abierta del día.
+  bool get _modoEdicion => widget.comidaParaEditar != null;
 
   List<_ItemCatalogo> _catalogo = [];
 
@@ -215,20 +225,13 @@ class _RegistroComidaState extends State<RegistroComida> {
 
       _Estado estadoInicial = _Estado.inicio;
 
-      // Un usuario solo tiene, como mucho, una comida abierta a la vez: si
-      // existe, seguimos añadiendo a ella en vez de empezar una nueva. Se
-      // busca solo por igualdad (sin orderBy) para no necesitar un índice
-      // compuesto en Firestore.
-      final abiertas = await userRef
-          .collection('comidas')
-          .where('estado', isEqualTo: 'abierto')
-          .limit(1)
-          .get();
-
-      if (abiertas.docs.isNotEmpty) {
-        final comidaDoc = abiertas.docs.first;
-        _comidaAbiertaRef = comidaDoc.reference;
-        final datosComida = comidaDoc.data();
+      if (_modoEdicion) {
+        // Editar una comida concreta ya guardada (desde Historial): se
+        // carga tal cual esté, sea 'abierto' o 'completo', y al guardar
+        // solo se actualiza, sin tocar la comida abierta del día.
+        final comidaDoc = await widget.comidaParaEditar!.get();
+        final datosComida = comidaDoc.data() as Map<String, dynamic>? ?? {};
+        _comidaAbiertaRef = widget.comidaParaEditar;
         _transcripcion = (datosComida['transcripcion'] ?? '').toString();
         _alimentos = ((datosComida['alimentos'] as List?) ?? [])
             .whereType<Map>()
@@ -236,6 +239,29 @@ class _RegistroComidaState extends State<RegistroComida> {
             .toList();
         estadoInicial = _Estado.confirmacion;
         _ultimoGuardadoSerializado = _serializarEstado();
+      } else {
+        // Un usuario solo tiene, como mucho, una comida abierta a la vez: si
+        // existe, seguimos añadiendo a ella en vez de empezar una nueva. Se
+        // busca solo por igualdad (sin orderBy) para no necesitar un índice
+        // compuesto en Firestore.
+        final abiertas = await userRef
+            .collection('comidas')
+            .where('estado', isEqualTo: 'abierto')
+            .limit(1)
+            .get();
+
+        if (abiertas.docs.isNotEmpty) {
+          final comidaDoc = abiertas.docs.first;
+          _comidaAbiertaRef = comidaDoc.reference;
+          final datosComida = comidaDoc.data();
+          _transcripcion = (datosComida['transcripcion'] ?? '').toString();
+          _alimentos = ((datosComida['alimentos'] as List?) ?? [])
+              .whereType<Map>()
+              .map((a) => _AlimentoEdit.desdeJson(Map<String, dynamic>.from(a)))
+              .toList();
+          estadoInicial = _Estado.confirmacion;
+          _ultimoGuardadoSerializado = _serializarEstado();
+        }
       }
 
       unawaited(_inicializarVoz());
@@ -497,6 +523,62 @@ class _RegistroComidaState extends State<RegistroComida> {
     } catch (_) {
       setState(() => _estado = _estadoPrevioEscucha);
       _mostrarMensaje('Ha ocurrido un error. Inténtalo de nuevo.');
+    }
+  }
+
+  /// Guarda cambios en una comida concreta que se está editando (desde
+  /// Historial), sin tocar su estado ('abierto'/'completo'): solo actualiza
+  /// y vuelve a la pantalla anterior.
+  Future<void> _guardarEdicion() async {
+    setState(() => _guardandoAhora = true);
+    try {
+      final json = await _llamarBackend('/v1/comida/calcular', {
+        'alimentos': _alimentos.map((a) => a.aPeticion()).toList(),
+      });
+      final recalculados = ((json['alimentos'] as List?) ?? [])
+          .map((a) =>
+              _AlimentoEdit.desdeJson(Map<String, dynamic>.from(a as Map)))
+          .toList();
+      final avisos =
+          ((json['avisos'] as List?) ?? []).map((a) => a.toString()).toList();
+
+      if (!mounted) return;
+      setState(() {
+        _alimentos = recalculados;
+        _avisos = avisos;
+      });
+
+      if (avisos.isNotEmpty) {
+        final continuar = await _confirmarPeseALosAvisos(avisos);
+        if (continuar != true) {
+          if (mounted) setState(() => _guardandoAhora = false);
+          return;
+        }
+      }
+
+      await widget.comidaParaEditar!.set({
+        'transcripcion': _transcripcion,
+        'alimentos': recalculados.map((a) => a.aFirestore()).toList(),
+        'kcal': recalculados.fold(0.0, (s, a) => s + a.kcal),
+        'proteinaG': recalculados.fold(0.0, (s, a) => s + a.proteinaG),
+        'carbosG': recalculados.fold(0.0, (s, a) => s + a.carbosG),
+        'grasaG': recalculados.fold(0.0, (s, a) => s + a.grasaG),
+        'ultimaActualizacion': FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true));
+
+      if (!mounted) return;
+      _ultimoGuardadoSerializado = _serializarEstado();
+      context.safePop();
+    } on _ErrorApi catch (e) {
+      if (mounted) {
+        setState(() => _guardandoAhora = false);
+        _mostrarMensaje(e.mensaje);
+      }
+    } catch (_) {
+      if (mounted) {
+        setState(() => _guardandoAhora = false);
+        _mostrarMensaje('No se ha podido guardar. Inténtalo de nuevo.');
+      }
     }
   }
 
@@ -1328,35 +1410,43 @@ class _RegistroComidaState extends State<RegistroComida> {
         ),
         Padding(
           padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              _botonPrincipal(
-                _guardandoAhora ? 'Guardando...' : 'Guardar',
-                (_guardandoAhora || _alimentos.isEmpty)
-                    ? null
-                    : () => _guardar(completar: false),
-                relleno: false,
-              ),
-              const SizedBox(height: 10),
-              ElevatedButton.icon(
-                onPressed: (_guardandoAhora || _alimentos.isEmpty)
-                    ? null
-                    : () => _guardar(completar: true),
-                icon:
-                    const Icon(Icons.check_circle_rounded, color: Colors.white),
-                label: Text(_guardandoAhora ? 'Guardando...' : 'Día completo',
-                    style: const TextStyle(fontWeight: FontWeight.w700)),
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: tema.primary,
-                  disabledBackgroundColor: _tinte(tema.primary, 0.4),
-                  foregroundColor: Colors.white,
-                  shape: const StadiumBorder(),
-                  padding: const EdgeInsets.symmetric(vertical: 15),
+          child: _modoEdicion
+              ? _botonPrincipal(
+                  _guardandoAhora ? 'Guardando...' : 'Guardar cambios',
+                  (_guardandoAhora || _alimentos.isEmpty)
+                      ? null
+                      : _guardarEdicion,
+                )
+              : Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    _botonPrincipal(
+                      _guardandoAhora ? 'Guardando...' : 'Guardar',
+                      (_guardandoAhora || _alimentos.isEmpty)
+                          ? null
+                          : () => _guardar(completar: false),
+                      relleno: false,
+                    ),
+                    const SizedBox(height: 10),
+                    ElevatedButton.icon(
+                      onPressed: (_guardandoAhora || _alimentos.isEmpty)
+                          ? null
+                          : () => _guardar(completar: true),
+                      icon: const Icon(Icons.check_circle_rounded,
+                          color: Colors.white),
+                      label: Text(
+                          _guardandoAhora ? 'Guardando...' : 'Día completo',
+                          style: const TextStyle(fontWeight: FontWeight.w700)),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: tema.primary,
+                        disabledBackgroundColor: _tinte(tema.primary, 0.4),
+                        foregroundColor: Colors.white,
+                        shape: const StadiumBorder(),
+                        padding: const EdgeInsets.symmetric(vertical: 15),
+                      ),
+                    ),
+                  ],
                 ),
-              ),
-            ],
-          ),
         ),
       ],
     );
@@ -1385,9 +1475,11 @@ class _RegistroComidaState extends State<RegistroComida> {
         cuerpo = _vistaProcesando();
         break;
       case _Estado.confirmacion:
-        titulo = _comidaAbiertaRef != null
-            ? 'Tu comida de hoy'
-            : 'Revisa lo que has comido';
+        titulo = _modoEdicion
+            ? 'Editar comida'
+            : (_comidaAbiertaRef != null
+                ? 'Tu comida de hoy'
+                : 'Revisa lo que has comido');
         cuerpo = _vistaConfirmacion();
         break;
       case _Estado.guardando:

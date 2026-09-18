@@ -3,13 +3,12 @@ import '/flutter_flow/flutter_flow_util.dart';
 import '/flutter_flow/flutter_flow_widgets.dart';
 import '/custom_code/widgets/index.dart' as custom_widgets;
 import '/index.dart';
-import 'record_meal_widget.dart' show RecordMealWidget;
-import 'package:cloud_firestore/cloud_firestore.dart';
+import 'meal_history_widget.dart' show MealHistoryWidget;
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:provider/provider.dart';
 
-class RecordMealModel extends FlutterFlowModel<RecordMealWidget> {
+class MealHistoryModel extends FlutterFlowModel<MealHistoryWidget> {
   @override
   void initState(BuildContext context) {}
 

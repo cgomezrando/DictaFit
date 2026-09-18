@@ -3,37 +3,31 @@ import '/flutter_flow/flutter_flow_util.dart';
 import '/flutter_flow/flutter_flow_widgets.dart';
 import '/custom_code/widgets/index.dart' as custom_widgets;
 import '/index.dart';
-import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:provider/provider.dart';
-import 'record_meal_model.dart';
-export 'record_meal_model.dart';
+import 'meal_history_model.dart';
+export 'meal_history_model.dart';
 
-class RecordMealWidget extends StatefulWidget {
-  const RecordMealWidget({
-    super.key,
-    this.comidaParaEditar,
-  });
+class MealHistoryWidget extends StatefulWidget {
+  const MealHistoryWidget({super.key});
 
-  final DocumentReference? comidaParaEditar;
-
-  static String routeName = 'RecordMeal';
-  static String routePath = '/recordMeal';
+  static String routeName = 'MealHistory';
+  static String routePath = '/mealHistory';
 
   @override
-  State<RecordMealWidget> createState() => _RecordMealWidgetState();
+  State<MealHistoryWidget> createState() => _MealHistoryWidgetState();
 }
 
-class _RecordMealWidgetState extends State<RecordMealWidget> {
-  late RecordMealModel _model;
+class _MealHistoryWidgetState extends State<MealHistoryWidget> {
+  late MealHistoryModel _model;
 
   final scaffoldKey = GlobalKey<ScaffoldState>();
 
   @override
   void initState() {
     super.initState();
-    _model = createModel(context, () => RecordMealModel());
+    _model = createModel(context, () => MealHistoryModel());
   }
 
   @override
@@ -45,6 +39,8 @@ class _RecordMealWidgetState extends State<RecordMealWidget> {
 
   @override
   Widget build(BuildContext context) {
+    context.watch<FFAppState>();
+
     return GestureDetector(
       onTap: () {
         FocusScope.of(context).unfocus();
@@ -56,15 +52,19 @@ class _RecordMealWidgetState extends State<RecordMealWidget> {
         body: Container(
           width: double.infinity,
           height: double.infinity,
-          child: custom_widgets.RegistroComida(
+          child: custom_widgets.HistorialComidas(
             width: double.infinity,
             height: double.infinity,
-            comidaParaEditar: widget!.comidaParaEditar,
-            onGuardado: () async {
-              if (Navigator.of(context).canPop()) {
-                context.pop();
-              }
-              context.pushNamed(HomeWidget.routeName);
+            onEditarComida: () async {
+              context.pushNamed(
+                RecordMealWidget.routeName,
+                queryParameters: {
+                  'comidaParaEditar': serializeParam(
+                    FFAppState().comidaGuardadaRef,
+                    ParamType.DocumentReference,
+                  ),
+                }.withoutNulls,
+              );
             },
           ),
         ),
