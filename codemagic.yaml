@@ -59,18 +59,32 @@ workflows:
             sed -i '' -E "s/^platform :ios.*/platform :ios, '15.0'/" ios/Podfile
           fi
 
+      - name: Configure HealthKit entitlement
+        script: |
+          ENT="ios/Runner/Runner.entitlements"
+          /usr/libexec/PlistBuddy -c "Delete :com.apple.developer.healthkit" "$ENT" 2>/dev/null || true
+          /usr/libexec/PlistBuddy -c "Add :com.apple.developer.healthkit bool true" "$ENT"
+          /usr/libexec/PlistBuddy -c "Delete :com.apple.developer.healthkit.access" "$ENT" 2>/dev/null || true
+          /usr/libexec/PlistBuddy -c "Add :com.apple.developer.healthkit.access array" "$ENT"
+          echo "Entitlements:"; cat "$ENT"
+
       - name: Portrait-only + privacy strings + export compliance
         script: |
           PLIST="ios/Runner/Info.plist"
-          # Portrait only (iPhone)
+          # Portrait only
           /usr/libexec/PlistBuddy -c "Delete :UISupportedInterfaceOrientations" "$PLIST" 2>/dev/null || true
           /usr/libexec/PlistBuddy -c "Add :UISupportedInterfaceOrientations array" "$PLIST"
           /usr/libexec/PlistBuddy -c "Add :UISupportedInterfaceOrientations:0 string UIInterfaceOrientationPortrait" "$PLIST"
-          # Permisos de voz/microfono (obligatorios para speech_to_text)
+          # Microfono / voz (speech_to_text)
           /usr/libexec/PlistBuddy -c "Delete :NSMicrophoneUsageDescription" "$PLIST" 2>/dev/null || true
           /usr/libexec/PlistBuddy -c "Add :NSMicrophoneUsageDescription string 'Esta app usa el microfono para dictar tus ejercicios y comidas por voz.'" "$PLIST"
           /usr/libexec/PlistBuddy -c "Delete :NSSpeechRecognitionUsageDescription" "$PLIST" 2>/dev/null || true
           /usr/libexec/PlistBuddy -c "Add :NSSpeechRecognitionUsageDescription string 'Esta app usa el reconocimiento de voz para convertir lo que dictas en texto.'" "$PLIST"
+          # HealthKit (obligatorio si usas health)
+          /usr/libexec/PlistBuddy -c "Delete :NSHealthShareUsageDescription" "$PLIST" 2>/dev/null || true
+          /usr/libexec/PlistBuddy -c "Add :NSHealthShareUsageDescription string 'Esta app lee tus datos de salud (pasos, peso, calorias) para personalizar tus rutinas y dieta.'" "$PLIST"
+          /usr/libexec/PlistBuddy -c "Delete :NSHealthUpdateUsageDescription" "$PLIST" 2>/dev/null || true
+          /usr/libexec/PlistBuddy -c "Add :NSHealthUpdateUsageDescription string 'Esta app guarda tus entrenamientos y progreso en Apple Health.'" "$PLIST"
           # Export compliance
           /usr/libexec/PlistBuddy -c "Delete :ITSAppUsesNonExemptEncryption" "$PLIST" 2>/dev/null || true
           /usr/libexec/PlistBuddy -c "Add :ITSAppUsesNonExemptEncryption bool false" "$PLIST"
