@@ -126,7 +126,8 @@ class _ErrorApi implements Exception {
 class _ItemCatalogo {
   final String id;
   final String nombre;
-  _ItemCatalogo(this.id, this.nombre);
+  final bool esTuyo;
+  _ItemCatalogo(this.id, this.nombre, {this.esTuyo = false});
 }
 
 const List<String> _tiposComida = [
@@ -1228,7 +1229,13 @@ class _RegistroComidaState extends State<RegistroComida> {
       ),
       builder: (ctx) {
         return StatefulBuilder(builder: (ctx, setSheet) {
-          final filtrados = _catalogo
+          final listaCompleta = [
+            ..._personalizados.map((p) => _ItemCatalogo(
+                (p['id'] ?? '').toString(), (p['nombre'] ?? '').toString(),
+                esTuyo: true)),
+            ..._catalogo,
+          ];
+          final filtrados = listaCompleta
               .where(
                   (a) => a.nombre.toLowerCase().contains(filtro.toLowerCase()))
               .toList();
@@ -1269,7 +1276,7 @@ class _RegistroComidaState extends State<RegistroComida> {
                   const SizedBox(height: 10),
                   SizedBox(
                     height: 320,
-                    child: _catalogo.isEmpty
+                    child: listaCompleta.isEmpty
                         ? Center(
                             child: Text('No se ha podido cargar el catálogo.',
                                 style: tema.bodySmall
@@ -1282,6 +1289,21 @@ class _RegistroComidaState extends State<RegistroComida> {
                                 title: Text(item.nombre,
                                     style: tema.bodyMedium
                                         .copyWith(color: tema.primaryText)),
+                                trailing: item.esTuyo
+                                    ? Container(
+                                        padding: const EdgeInsets.symmetric(
+                                            horizontal: 8, vertical: 3),
+                                        decoration: BoxDecoration(
+                                          color: _tinte(tema.secondary, 0.16),
+                                          borderRadius:
+                                              BorderRadius.circular(999),
+                                        ),
+                                        child: Text('Tuyo',
+                                            style: tema.bodySmall.copyWith(
+                                                color: tema.secondary,
+                                                fontWeight: FontWeight.w600)),
+                                      )
+                                    : null,
                                 onTap: () => Navigator.of(ctx).pop(item),
                               );
                             },

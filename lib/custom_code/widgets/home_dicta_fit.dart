@@ -1399,7 +1399,7 @@ class _HomeDictaFitState extends State<HomeDictaFit> {
                                       alHablar: () =>
                                           context.pushNamed('RecordMeal'),
                                       alBoton: () =>
-                                          _proximamente('El detalle de macros'),
+                                          context.pushNamed('Statistics'),
                                     ),
                                     const SizedBox(height: 10),
                                     _tarjetaFuncion(

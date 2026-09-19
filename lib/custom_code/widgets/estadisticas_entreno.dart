@@ -88,6 +88,12 @@ class _EstadisticasEntrenoState extends State<EstadisticasEntreno> {
   /// sacan las medias de semana/mes/6 meses/año.
   List<Map<String, dynamic>>? _pasosRecientes;
 
+  /// Comidas del último año, para las medias de calorías/macros. A
+  /// diferencia de "pasos" (un documento por día), puede haber varias
+  /// comidas el mismo día (varias sesiones abiertas y cerradas), así que
+  /// hay que sumarlas por día antes de sacar la media.
+  List<Map<String, dynamic>>? _comidasRecientes;
+
   @override
   void initState() {
     super.initState();
@@ -102,6 +108,7 @@ class _EstadisticasEntrenoState extends State<EstadisticasEntreno> {
           .snapshots();
       _cargarEntrenosRecientes(uid);
       _cargarPasosRecientes(uid);
+      _cargarComidasRecientes(uid);
     }
   }
 
@@ -138,6 +145,23 @@ class _EstadisticasEntrenoState extends State<EstadisticasEntreno> {
     });
   }
 
+  void _cargarComidasRecientes(String uid) {
+    final desde = DateTime.now().subtract(const Duration(days: 370));
+    FirebaseFirestore.instance
+        .collection('users')
+        .doc(uid)
+        .collection('comidas')
+        .where('fecha', isGreaterThanOrEqualTo: Timestamp.fromDate(desde))
+        .get()
+        .then((snap) {
+      if (!mounted) return;
+      setState(
+          () => _comidasRecientes = snap.docs.map((d) => d.data()).toList());
+    }).catchError((_) {
+      if (mounted) setState(() => _comidasRecientes = []);
+    });
+  }
+
   /// Media de pasos/día en los últimos [dias] días (solo cuenta los días
   /// que de verdad tienen un registro; si no hay ninguno, null).
   double? _mediaPasos(int dias) {
@@ -153,6 +177,59 @@ class _EstadisticasEntrenoState extends State<EstadisticasEntreno> {
         .toList();
     if (valores.isEmpty) return null;
     return valores.reduce((a, b) => a + b) / valores.length;
+  }
+
+  /// Suma kcal/macros por día de calendario a partir de _comidasRecientes
+  /// (puede haber más de una comida guardada el mismo día).
+  Map<String, Map<String, double>> _totalesNutricionPorDia() {
+    final porDia = <String, Map<String, double>>{};
+    if (_comidasRecientes == null) return porDia;
+    for (final c in _comidasRecientes!) {
+      final f = c['fecha'];
+      if (f is! Timestamp) continue;
+      final dt = f.toDate();
+      final clave = '${dt.year}-${dt.month}-${dt.day}';
+      final actual = porDia.putIfAbsent(
+          clave,
+          () => {
+                'kcal': 0,
+                'proteinaG': 0,
+                'carbosG': 0,
+                'grasaG': 0,
+                'ts': dt.millisecondsSinceEpoch.toDouble(),
+              });
+      actual['kcal'] =
+          (actual['kcal'] ?? 0) + ((c['kcal'] as num?)?.toDouble() ?? 0);
+      actual['proteinaG'] = (actual['proteinaG'] ?? 0) +
+          ((c['proteinaG'] as num?)?.toDouble() ?? 0);
+      actual['carbosG'] =
+          (actual['carbosG'] ?? 0) + ((c['carbosG'] as num?)?.toDouble() ?? 0);
+      actual['grasaG'] =
+          (actual['grasaG'] ?? 0) + ((c['grasaG'] as num?)?.toDouble() ?? 0);
+    }
+    return porDia;
+  }
+
+  /// Media diaria de kcal/macros en los últimos [dias] días (solo cuenta
+  /// los días que de verdad tienen alguna comida guardada).
+  Map<String, double>? _mediaNutricion(int dias) {
+    final porDia = _totalesNutricionPorDia();
+    if (porDia.isEmpty) return null;
+    final desde = DateTime.now().subtract(Duration(days: dias));
+    final diasEnVentana = porDia.values
+        .where((d) => DateTime.fromMillisecondsSinceEpoch(d['ts']!.toInt())
+            .isAfter(desde))
+        .toList();
+    if (diasEnVentana.isEmpty) return null;
+    double suma(String campo) =>
+        diasEnVentana.fold(0.0, (s, d) => s + (d[campo] ?? 0));
+    final n = diasEnVentana.length;
+    return {
+      'kcal': suma('kcal') / n,
+      'proteinaG': suma('proteinaG') / n,
+      'carbosG': suma('carbosG') / n,
+      'grasaG': suma('grasaG') / n,
+    };
   }
 
   void _cargarMarcasFaltantes(Iterable<String> ejercicioIds) {
@@ -1201,6 +1278,107 @@ class _EstadisticasEntrenoState extends State<EstadisticasEntreno> {
     return 'hace $dias días';
   }
 
+  Widget _tarjetaNutricion() {
+    final tema = FlutterFlowTheme.of(context);
+
+    if (_comidasRecientes == null) {
+      return Container(
+        margin: const EdgeInsets.only(bottom: 14),
+        padding: const EdgeInsets.all(24),
+        decoration: BoxDecoration(
+          color: tema.secondaryBackground,
+          borderRadius: BorderRadius.circular(22),
+          border: Border.all(color: tema.alternate),
+        ),
+        child: Center(child: CircularProgressIndicator(color: tema.primary)),
+      );
+    }
+
+    final periodos = [
+      ('Esta semana', _mediaNutricion(7)),
+      ('Este mes', _mediaNutricion(30)),
+      ('Últimos 6 meses', _mediaNutricion(182)),
+      ('Este año', _mediaNutricion(365)),
+    ];
+
+    if (periodos.every((p) => p.$2 == null)) {
+      return Container(
+        margin: const EdgeInsets.only(bottom: 14),
+        padding: const EdgeInsets.all(20),
+        decoration: BoxDecoration(
+          color: tema.secondaryBackground,
+          borderRadius: BorderRadius.circular(22),
+          border: Border.all(color: tema.alternate),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(children: [
+              Icon(Icons.restaurant_rounded, size: 20, color: tema.secondary),
+              const SizedBox(width: 8),
+              Text('Nutrición',
+                  style: tema.titleSmall.copyWith(
+                      color: tema.primaryText, fontWeight: FontWeight.w700)),
+            ]),
+            const SizedBox(height: 10),
+            Text('Todavía no hay comidas guardadas.',
+                style: tema.bodySmall.copyWith(color: tema.secondaryText)),
+          ],
+        ),
+      );
+    }
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: 14),
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: tema.secondaryBackground,
+        borderRadius: BorderRadius.circular(22),
+        border: Border.all(color: tema.alternate),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(children: [
+            Icon(Icons.restaurant_rounded, size: 20, color: tema.secondary),
+            const SizedBox(width: 8),
+            Text('Nutrición — media diaria',
+                style: tema.titleSmall.copyWith(
+                    color: tema.primaryText, fontWeight: FontWeight.w700)),
+          ]),
+          const SizedBox(height: 14),
+          for (final periodo in periodos)
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 7),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(periodo.$1,
+                      style: tema.bodyMedium.copyWith(
+                          color: tema.primaryText,
+                          fontWeight: FontWeight.w600)),
+                  const SizedBox(height: 3),
+                  if (periodo.$2 == null)
+                    Text('sin datos',
+                        style:
+                            tema.bodySmall.copyWith(color: tema.secondaryText))
+                  else
+                    Text(
+                      '${_miles(periodo.$2!['kcal']!.round())} kcal   ·   '
+                      'P ${periodo.$2!['proteinaG']!.round()} g   ·   '
+                      'C ${periodo.$2!['carbosG']!.round()} g   ·   '
+                      'G ${periodo.$2!['grasaG']!.round()} g',
+                      style: tema.bodySmall.copyWith(
+                          color: tema.secondary, fontWeight: FontWeight.w600),
+                    ),
+                ],
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
   Widget _tarjetaPasos() {
     final tema = FlutterFlowTheme.of(context);
 
@@ -1430,6 +1608,7 @@ class _EstadisticasEntrenoState extends State<EstadisticasEntreno> {
                             children: [
                               _seccionPesoYGrasa(docs),
                               _tarjetaCuerpoSemana(),
+                              _tarjetaNutricion(),
                               _tarjetaPasos(),
                               _resumenRapido(),
                             ],
