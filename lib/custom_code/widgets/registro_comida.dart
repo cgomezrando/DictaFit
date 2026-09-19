@@ -129,44 +129,6 @@ class _ItemCatalogo {
   _ItemCatalogo(this.id, this.nombre);
 }
 
-class _ProductoPersonalizado {
-  final String id;
-  final String nombre;
-  final double kcal100;
-  final double proteina100;
-  final double carbos100;
-  final double grasa100;
-
-  _ProductoPersonalizado({
-    required this.id,
-    required this.nombre,
-    required this.kcal100,
-    this.proteina100 = 0,
-    this.carbos100 = 0,
-    this.grasa100 = 0,
-  });
-
-  factory _ProductoPersonalizado.desdeDoc(String id, Map<String, dynamic> j) =>
-      _ProductoPersonalizado(
-        id: id,
-        nombre: (j['nombre'] ?? 'Producto sin nombre').toString(),
-        kcal100: (j['kcal100'] as num?)?.toDouble() ?? 0,
-        proteina100: (j['proteina100'] as num?)?.toDouble() ?? 0,
-        carbos100: (j['carbos100'] as num?)?.toDouble() ?? 0,
-        grasa100: (j['grasa100'] as num?)?.toDouble() ?? 0,
-      );
-
-  /// Lo que entiende el backend en ProcesarComidaPeticion.alimentosPersonalizados.
-  Map<String, dynamic> aResumenPeticion() => {
-        'id': id,
-        'nombre': nombre,
-        'kcal100': kcal100,
-        'proteina100': proteina100,
-        'carbos100': carbos100,
-        'grasa100': grasa100,
-      };
-}
-
 const List<String> _tiposComida = [
   'desayuno',
   'comida',
@@ -246,7 +208,6 @@ class _RegistroComidaState extends State<RegistroComida> {
   /// users/{uid}/alimentosPersonalizados: {id, nombre, kcal100, proteina100,
   /// carbos100, grasa100}.
   List<Map<String, dynamic>> _personalizados = [];
-  List<_ProductoPersonalizado> _personalizados = [];
 
   final TextEditingController _controladorTexto = TextEditingController();
   String _textoEscuchado = '';

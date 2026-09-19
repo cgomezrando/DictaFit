@@ -75,6 +75,11 @@ class _EstadisticasEntrenoState extends State<EstadisticasEntreno> {
   /// el conteo semanal. Se cargan una vez, no hace falta que sea en vivo.
   List<Map<String, dynamic>>? _entrenosRecientes;
 
+  /// Pasos diarios del último año (colección "pasos"; no confundir con
+  /// "pesos", que es el peso corporal). Se cargan una vez, y de ahí se
+  /// sacan las medias de semana/mes/6 meses/año.
+  List<Map<String, dynamic>>? _pasosRecientes;
+
   @override
   void initState() {
     super.initState();
@@ -88,6 +93,7 @@ class _EstadisticasEntrenoState extends State<EstadisticasEntreno> {
           .limit(200)
           .snapshots();
       _cargarEntrenosRecientes(uid);
+      _cargarPasosRecientes(uid);
     }
   }
 
@@ -108,6 +114,39 @@ class _EstadisticasEntrenoState extends State<EstadisticasEntreno> {
     });
   }
 
+  void _cargarPasosRecientes(String uid) {
+    final desde = DateTime.now().subtract(const Duration(days: 370));
+    FirebaseFirestore.instance
+        .collection('users')
+        .doc(uid)
+        .collection('pasos')
+        .where('fecha', isGreaterThanOrEqualTo: Timestamp.fromDate(desde))
+        .get()
+        .then((snap) {
+      if (!mounted) return;
+      setState(() => _pasosRecientes = snap.docs.map((d) => d.data()).toList());
+    }).catchError((_) {
+      if (mounted) setState(() => _pasosRecientes = []);
+    });
+  }
+
+  /// Media de pasos/día en los últimos [dias] días (solo cuenta los días
+  /// que de verdad tienen un registro; si no hay ninguno, null).
+  double? _mediaPasos(int dias) {
+    if (_pasosRecientes == null || _pasosRecientes!.isEmpty) return null;
+    final desde = DateTime.now().subtract(Duration(days: dias));
+    final valores = _pasosRecientes!
+        .where((d) {
+          final f = d['fecha'];
+          return f is Timestamp && f.toDate().isAfter(desde);
+        })
+        .map((d) => (d['totalPasos'] as num?)?.toDouble() ?? 0)
+        .where((v) => v > 0)
+        .toList();
+    if (valores.isEmpty) return null;
+    return valores.reduce((a, b) => a + b) / valores.length;
+  }
+
   // ---------- Utilidades ----------
 
   Color _tinte(Color color, double opacidad) =>
@@ -115,6 +154,16 @@ class _EstadisticasEntrenoState extends State<EstadisticasEntreno> {
 
   String _numeroCorto(double v) =>
       v == v.roundToDouble() ? v.toInt().toString() : v.toStringAsFixed(1);
+
+  String _miles(int valor) {
+    final texto = valor.abs().toString();
+    final buffer = StringBuffer();
+    for (int i = 0; i < texto.length; i++) {
+      if (i > 0 && (texto.length - i) % 3 == 0) buffer.write('.');
+      buffer.write(texto[i]);
+    }
+    return '${valor < 0 ? '-' : ''}$buffer';
+  }
 
   String _fecha(DateTime f) {
     const meses = [
@@ -400,6 +449,107 @@ class _EstadisticasEntrenoState extends State<EstadisticasEntreno> {
     return 'hace $dias días';
   }
 
+  Widget _tarjetaPasos() {
+    final tema = FlutterFlowTheme.of(context);
+
+    if (_pasosRecientes == null) {
+      return Container(
+        margin: const EdgeInsets.only(bottom: 14),
+        padding: const EdgeInsets.all(24),
+        decoration: BoxDecoration(
+          color: tema.secondaryBackground,
+          borderRadius: BorderRadius.circular(22),
+          border: Border.all(color: tema.alternate),
+        ),
+        child: Center(child: CircularProgressIndicator(color: tema.primary)),
+      );
+    }
+
+    final periodos = [
+      ('Esta semana', _mediaPasos(7)),
+      ('Este mes', _mediaPasos(30)),
+      ('Últimos 6 meses', _mediaPasos(182)),
+      ('Este año', _mediaPasos(365)),
+    ];
+
+    if (periodos.every((p) => p.$2 == null)) {
+      return Container(
+        margin: const EdgeInsets.only(bottom: 14),
+        padding: const EdgeInsets.all(20),
+        decoration: BoxDecoration(
+          color: tema.secondaryBackground,
+          borderRadius: BorderRadius.circular(22),
+          border: Border.all(color: tema.alternate),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(children: [
+              Icon(Icons.directions_walk_rounded,
+                  size: 20, color: tema.secondary),
+              const SizedBox(width: 8),
+              Text('Pasos',
+                  style: tema.titleSmall.copyWith(
+                      color: tema.primaryText, fontWeight: FontWeight.w700)),
+            ]),
+            const SizedBox(height: 10),
+            Text(
+                'Todavía no hay pasos guardados. Se registran solos al abrir Home.',
+                style: tema.bodySmall.copyWith(color: tema.secondaryText)),
+          ],
+        ),
+      );
+    }
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: 14),
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: tema.secondaryBackground,
+        borderRadius: BorderRadius.circular(22),
+        border: Border.all(color: tema.alternate),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(children: [
+            Icon(Icons.directions_walk_rounded,
+                size: 20, color: tema.secondary),
+            const SizedBox(width: 8),
+            Text('Pasos — media diaria',
+                style: tema.titleSmall.copyWith(
+                    color: tema.primaryText, fontWeight: FontWeight.w700)),
+          ]),
+          const SizedBox(height: 14),
+          for (final periodo in periodos)
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 5),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Text(periodo.$1,
+                        style:
+                            tema.bodyMedium.copyWith(color: tema.primaryText)),
+                  ),
+                  Text(
+                    periodo.$2 == null
+                        ? 'sin datos'
+                        : '${_miles(periodo.$2!.round())} pasos',
+                    style: tema.bodyMedium.copyWith(
+                      color: periodo.$2 == null
+                          ? tema.secondaryText
+                          : tema.secondary,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
   Widget _resumenRapido() {
     final tema = FlutterFlowTheme.of(context);
 
@@ -527,6 +677,7 @@ class _EstadisticasEntrenoState extends State<EstadisticasEntreno> {
                             crossAxisAlignment: CrossAxisAlignment.stretch,
                             children: [
                               _seccionPesoYGrasa(docs),
+                              _tarjetaPasos(),
                               _resumenRapido(),
                             ],
                           ),
