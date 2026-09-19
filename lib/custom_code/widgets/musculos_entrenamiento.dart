@@ -361,6 +361,76 @@ class _MusculosEntrenamientoState extends State<MusculosEntrenamiento> {
     return Wrap(spacing: 6, runSpacing: 6, children: celdas);
   }
 
+  Future<void> _explicarPesosSugeridos() async {
+    final tema = FlutterFlowTheme.of(context);
+    await showModalBottomSheet(
+      context: context,
+      backgroundColor: tema.secondaryBackground,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      builder: (ctx) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(20, 18, 20, 20),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text('Qué significan las casillas de 8 y 12',
+                  style: tema.titleMedium.copyWith(
+                      color: tema.primaryText, fontWeight: FontWeight.w700)),
+              const SizedBox(height: 16),
+              _filaExplicacion(tema.secondaryText, '~35 kg',
+                  'Estimación a partir de tu 1RM. Todavía no has llegado a esas repeticiones con datos reales de este ejercicio.'),
+              const SizedBox(height: 12),
+              _filaExplicacion(tema.primary, '8 ✓ repite (30 kg)',
+                  'Ya cumpliste esas repeticiones una vez. Repite el mismo peso la próxima sesión para confirmarlo.'),
+              const SizedBox(height: 12),
+              _filaExplicacion(tema.secondary, '8 ✓✓ → 31 kg',
+                  'Lo cumpliste dos sesiones seguidas: toca subir el peso ("regla 2 para 2", el criterio habitual en fuerza para saber cuándo progresar).'),
+              const SizedBox(height: 18),
+              ElevatedButton(
+                onPressed: () => Navigator.of(ctx).pop(),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: tema.primary,
+                  foregroundColor: Colors.white,
+                  shape: const StadiumBorder(),
+                  padding: const EdgeInsets.symmetric(vertical: 14),
+                  minimumSize: const Size.fromHeight(48),
+                ),
+                child: const Text('Entendido',
+                    style: TextStyle(fontWeight: FontWeight.w700)),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _filaExplicacion(Color color, String ejemplo, String texto) {
+    final tema = FlutterFlowTheme.of(context);
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Container(
+          margin: const EdgeInsets.only(top: 2),
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+          decoration: BoxDecoration(
+            color: _tinte(color, 0.14),
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(color: _tinte(color, 0.5)),
+          ),
+          child: Text(ejemplo, style: tema.bodySmall.copyWith(color: color)),
+        ),
+        const SizedBox(width: 10),
+        Expanded(
+            child: Text(texto,
+                style: tema.bodySmall.copyWith(color: tema.secondaryText))),
+      ],
+    );
+  }
+
   Widget _tarjetaEjercicios(Map<String, dynamic> entreno) {
     final tema = FlutterFlowTheme.of(context);
     final ejercicios = ((entreno['ejercicios'] as List?) ?? [])
@@ -383,9 +453,19 @@ class _MusculosEntrenamientoState extends State<MusculosEntrenamiento> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text('Ejercicios',
-              style: tema.titleSmall.copyWith(
-                  color: tema.primaryText, fontWeight: FontWeight.w600)),
+          Row(
+            children: [
+              Text('Ejercicios',
+                  style: tema.titleSmall.copyWith(
+                      color: tema.primaryText, fontWeight: FontWeight.w600)),
+              const SizedBox(width: 6),
+              GestureDetector(
+                onTap: _explicarPesosSugeridos,
+                child: Icon(Icons.info_outline_rounded,
+                    size: 17, color: tema.secondaryText),
+              ),
+            ],
+          ),
           const SizedBox(height: 12),
           for (var i = 0; i < ejercicios.length; i++)
             _filaEjercicio(ejercicios[i],
