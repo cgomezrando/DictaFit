@@ -139,9 +139,11 @@ const Map<String, String> _nombreTipoComida = {
 /// Desayuno 6:00–11:00, comida 11:00–16:00, cena 20:00–24:00; cualquier otra
 /// hora (media mañana, la merienda, la madrugada) cae en "fuera de hora".
 /// Es solo un punto de partida: el usuario puede corregirlo tocando la
-/// etiqueta del grupo en la pantalla de confirmación.
-String _detectarTipoComida() {
-  final h = DateTime.now().hour;
+/// etiqueta del grupo en la pantalla de confirmación. Usa la fecha que se
+/// le pase (la editada a mano, si la hay) en vez de siempre "ahora", para
+/// que registrar algo con fecha atrasada detecte bien el tipo de comida.
+String _detectarTipoComida(DateTime referencia) {
+  final h = referencia.hour;
   if (h >= 6 && h < 11) return 'desayuno';
   if (h >= 11 && h < 16) return 'comida';
   if (h >= 20 && h < 24) return 'cena';
@@ -217,9 +219,17 @@ class _RegistroComidaState extends State<RegistroComida> {
   /// saber si hay cambios sin guardar y no preguntar "¿salir?" sin motivo.
   String? _ultimoGuardadoSerializado;
 
+  /// Fecha (y hora) de esta comida. null hasta que se carga o se toca a
+  /// mano: si se guarda así, se usa el momento real del guardado (como
+  /// hasta ahora). Al cargar una comida ya existente (abierta o en edición)
+  /// se rellena con su fecha real, para no movérsela sin querer al guardar
+  /// otro cambio.
+  DateTime? _fechaEditada;
+
   String _serializarEstado() => jsonEncode({
         't': _transcripcion,
-        'a': _alimentos.map((a) => a.aFirestore()).toList()
+        'a': _alimentos.map((a) => a.aFirestore()).toList(),
+        'f': _fechaEditada?.toIso8601String(),
       });
 
   List<String> _avisos = [];
@@ -272,6 +282,9 @@ class _RegistroComidaState extends State<RegistroComida> {
             .map((a) => _AlimentoEdit.desdeJson(Map<String, dynamic>.from(a)))
             .toList();
         estadoInicial = _Estado.confirmacion;
+        _fechaEditada = (datosComida['fecha'] is Timestamp)
+            ? (datosComida['fecha'] as Timestamp).toDate()
+            : null;
         _ultimoGuardadoSerializado = _serializarEstado();
       } else {
         // Un usuario solo tiene, como mucho, una comida abierta a la vez: si
@@ -294,6 +307,9 @@ class _RegistroComidaState extends State<RegistroComida> {
               .map((a) => _AlimentoEdit.desdeJson(Map<String, dynamic>.from(a)))
               .toList();
           estadoInicial = _Estado.confirmacion;
+          _fechaEditada = (datosComida['fecha'] is Timestamp)
+              ? (datosComida['fecha'] as Timestamp).toDate()
+              : null;
           _ultimoGuardadoSerializado = _serializarEstado();
         }
       }
@@ -533,7 +549,8 @@ class _RegistroComidaState extends State<RegistroComida> {
           .toList();
       // El backend no sabe de tipos de comida: se etiqueta aquí, con la
       // hora actual, todo lo que viene de este mismo dictado.
-      final tipoDeEsteBloque = _detectarTipoComida();
+      final tipoDeEsteBloque =
+          _detectarTipoComida(_fechaEditada ?? DateTime.now());
       for (final a in alimentosNuevos) {
         a.tipo = tipoDeEsteBloque;
       }
@@ -609,6 +626,7 @@ class _RegistroComidaState extends State<RegistroComida> {
         'proteinaG': recalculados.fold(0.0, (s, a) => s + a.proteinaG),
         'carbosG': recalculados.fold(0.0, (s, a) => s + a.carbosG),
         'grasaG': recalculados.fold(0.0, (s, a) => s + a.grasaG),
+        if (_fechaEditada != null) 'fecha': Timestamp.fromDate(_fechaEditada!),
         'ultimaActualizacion': FieldValue.serverTimestamp(),
       }, SetOptions(merge: true));
 
@@ -669,6 +687,9 @@ class _RegistroComidaState extends State<RegistroComida> {
         'proteinaG': recalculados.fold(0.0, (s, a) => s + a.proteinaG),
         'carbosG': recalculados.fold(0.0, (s, a) => s + a.carbosG),
         'grasaG': recalculados.fold(0.0, (s, a) => s + a.grasaG),
+        'fecha': _fechaEditada != null
+            ? Timestamp.fromDate(_fechaEditada!)
+            : FieldValue.serverTimestamp(),
         'ultimaActualizacion': FieldValue.serverTimestamp(),
         'estado': completar ? 'completo' : 'abierto',
         if (completar) 'fechaCompletado': FieldValue.serverTimestamp(),
@@ -679,7 +700,7 @@ class _RegistroComidaState extends State<RegistroComida> {
             .collection('users')
             .doc(uid)
             .collection('comidas')
-            .add({...datosComida, 'fecha': FieldValue.serverTimestamp()});
+            .add(datosComida);
         if (!completar) _comidaAbiertaRef = nueva;
       } else {
         await _comidaAbiertaRef!.set(datosComida, SetOptions(merge: true));
@@ -800,7 +821,7 @@ class _RegistroComidaState extends State<RegistroComida> {
         alimentoId: 'desconocido',
         nombre: 'Nuevo alimento',
         gramos: 100,
-        tipo: _detectarTipoComida())));
+        tipo: _detectarTipoComida(_fechaEditada ?? DateTime.now()))));
   }
 
   Future<void> _elegirAlimento(int indice) async {
@@ -1342,6 +1363,93 @@ class _RegistroComidaState extends State<RegistroComida> {
     );
   }
 
+  String _fechaCorta(DateTime f) {
+    const meses = [
+      'ene',
+      'feb',
+      'mar',
+      'abr',
+      'may',
+      'jun',
+      'jul',
+      'ago',
+      'sep',
+      'oct',
+      'nov',
+      'dic'
+    ];
+    return '${f.day} ${meses[f.month - 1]}';
+  }
+
+  Future<void> _elegirFecha() async {
+    final tema = FlutterFlowTheme.of(context);
+    final base = _fechaEditada ?? DateTime.now();
+    final temaOscuro = ThemeData.dark().copyWith(
+      colorScheme: ColorScheme.dark(
+        primary: tema.primary,
+        onPrimary: Colors.white,
+        surface: tema.secondaryBackground,
+        onSurface: tema.primaryText,
+      ),
+      dialogBackgroundColor: tema.secondaryBackground,
+    );
+
+    final fecha = await showDatePicker(
+      context: context,
+      initialDate: base,
+      firstDate: DateTime.now().subtract(const Duration(days: 365)),
+      lastDate: DateTime.now(),
+      builder: (ctx, child) => Theme(data: temaOscuro, child: child!),
+    );
+    if (fecha == null || !mounted) return;
+
+    setState(() {
+      // Solo se pregunta la fecha, no la hora: se mantiene la hora que ya
+      // hubiera (la real, o la de la sesión que se está editando), y solo
+      // cambia el día. Aplica a todo el registro entero de ese día.
+      _fechaEditada =
+          DateTime(fecha.year, fecha.month, fecha.day, base.hour, base.minute);
+      // No retoca el tipo (desayuno/comida/cena) de los alimentos ya
+      // dictados: un mismo registro puede mezclar varias franjas horarias,
+      // así que solo afecta a lo que se dicte de aquí en adelante. Para
+      // corregir un grupo ya dictado, se toca su propia etiqueta.
+    });
+  }
+
+  Widget _selectorFecha() {
+    final tema = FlutterFlowTheme.of(context);
+    final f = _fechaEditada ?? DateTime.now();
+    final ahora = DateTime.now();
+    final esHoy =
+        f.year == ahora.year && f.month == ahora.month && f.day == ahora.day;
+    final texto = esHoy ? 'Hoy' : _fechaCorta(f);
+
+    return GestureDetector(
+      onTap: _elegirFecha,
+      child: Container(
+        margin: const EdgeInsets.only(bottom: 12),
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        decoration: BoxDecoration(
+          color: tema.secondaryBackground,
+          borderRadius: BorderRadius.circular(999),
+          border: Border.all(color: tema.alternate),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.event_rounded, size: 16, color: tema.secondaryText),
+            const SizedBox(width: 6),
+            Text(texto,
+                style: tema.bodySmall.copyWith(
+                    color: tema.primaryText, fontWeight: FontWeight.w600)),
+            const SizedBox(width: 6),
+            Icon(Icons.edit_rounded, size: 13, color: tema.secondaryText),
+          ],
+        ),
+      ),
+    );
+  }
+
   Widget _resumenTotales() {
     final tema = FlutterFlowTheme.of(context);
     final kcal = _alimentos.fold(0.0, (s, a) => s + a.kcal);
@@ -1469,6 +1577,7 @@ class _RegistroComidaState extends State<RegistroComida> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
+                Align(alignment: Alignment.centerLeft, child: _selectorFecha()),
                 Container(
                   padding: const EdgeInsets.all(12),
                   decoration: BoxDecoration(

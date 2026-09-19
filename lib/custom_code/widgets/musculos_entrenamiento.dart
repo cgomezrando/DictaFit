@@ -754,7 +754,11 @@ class _MusculosEntrenamientoState extends State<MusculosEntrenamiento> {
           relleno = _colorReposo;
         } else {
           relleno = _hex(_colorCalor(intensidad));
-          opacidad = (0.55 + 0.4 * intensidad).toStringAsFixed(2);
+          // Antes el suelo era 0.55: hasta una intensidad casi nula (un
+          // músculo que solo aparece como secundario en un ejercicio, por
+          // ejemplo) se pintaba ya a más de la mitad de opacidad, y se veía
+          // igual de "trabajado" que uno que de verdad protagoniza el día.
+          opacidad = (0.18 + 0.82 * intensidad).toStringAsFixed(2);
         }
       }
       svg.write('<path d="$d" fill="$relleno" fill-opacity="$opacidad" '

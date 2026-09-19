@@ -208,9 +208,16 @@ class _RegistroEntrenoState extends State<RegistroEntreno> {
   /// y no preguntar "¿salir?" cuando no hay nada que perder.
   String? _ultimoGuardadoSerializado;
 
+  /// Fecha (y hora) de este entreno. null hasta que se carga o se toca a
+  /// mano: si se guarda así, se usa el momento real del guardado. Al cargar
+  /// un entreno ya existente (abierto o en edición) se rellena con su fecha
+  /// real, para no movérsela sin querer al guardar otro cambio.
+  DateTime? _fechaEditada;
+
   String _serializarEstado() => jsonEncode({
         't': _transcripcion,
-        'e': _ejercicios.map((e) => e.aFirestore()).toList()
+        'e': _ejercicios.map((e) => e.aFirestore()).toList(),
+        'f': _fechaEditada?.toIso8601String(),
       });
   List<String> _avisos = [];
   int? _notasRestantes;
@@ -276,6 +283,9 @@ class _RegistroEntrenoState extends State<RegistroEntreno> {
             .map((e) => _EjercicioEdit.desdeJson(Map<String, dynamic>.from(e)))
             .toList();
         estadoInicial = _Estado.confirmacion;
+        _fechaEditada = (datosEntreno['fecha'] is Timestamp)
+            ? (datosEntreno['fecha'] as Timestamp).toDate()
+            : null;
         _ultimoGuardadoSerializado = _serializarEstado();
       } else {
         // Un usuario solo tiene, como mucho, un entreno abierto a la vez: si
@@ -299,6 +309,9 @@ class _RegistroEntrenoState extends State<RegistroEntreno> {
                   (e) => _EjercicioEdit.desdeJson(Map<String, dynamic>.from(e)))
               .toList();
           estadoInicial = _Estado.confirmacion;
+          _fechaEditada = (datosEntreno['fecha'] is Timestamp)
+              ? (datosEntreno['fecha'] as Timestamp).toDate()
+              : null;
           _ultimoGuardadoSerializado = _serializarEstado();
         }
       }
@@ -652,6 +665,7 @@ class _RegistroEntrenoState extends State<RegistroEntreno> {
         'transcripcion': _transcripcion,
         'pesoCorporalKg': _pesoCorporalKg,
         'ejercicios': recalculados.map((e) => e.aFirestore()).toList(),
+        if (_fechaEditada != null) 'fecha': Timestamp.fromDate(_fechaEditada!),
         'ultimaActualizacion': FieldValue.serverTimestamp(),
       }, SetOptions(merge: true));
 
@@ -708,6 +722,9 @@ class _RegistroEntrenoState extends State<RegistroEntreno> {
         'transcripcion': _transcripcion,
         'pesoCorporalKg': _pesoCorporalKg,
         'ejercicios': recalculados.map((e) => e.aFirestore()).toList(),
+        'fecha': _fechaEditada != null
+            ? Timestamp.fromDate(_fechaEditada!)
+            : FieldValue.serverTimestamp(),
         'ultimaActualizacion': FieldValue.serverTimestamp(),
         'estado': completar ? 'completo' : 'abierto',
         if (completar) 'fechaCompletado': FieldValue.serverTimestamp(),
@@ -719,7 +736,7 @@ class _RegistroEntrenoState extends State<RegistroEntreno> {
             .collection('users')
             .doc(uid)
             .collection('entrenos')
-            .add({...datosEntreno, 'fecha': FieldValue.serverTimestamp()});
+            .add(datosEntreno);
         if (!completar) _entrenoAbiertoRef = referencia;
       } else {
         referencia = _entrenoAbiertoRef!;
@@ -1382,6 +1399,88 @@ class _RegistroEntrenoState extends State<RegistroEntreno> {
     );
   }
 
+  String _fechaCorta(DateTime f) {
+    const meses = [
+      'ene',
+      'feb',
+      'mar',
+      'abr',
+      'may',
+      'jun',
+      'jul',
+      'ago',
+      'sep',
+      'oct',
+      'nov',
+      'dic'
+    ];
+    return '${f.day} ${meses[f.month - 1]}';
+  }
+
+  Future<void> _elegirFecha() async {
+    final tema = FlutterFlowTheme.of(context);
+    final base = _fechaEditada ?? DateTime.now();
+    final temaOscuro = ThemeData.dark().copyWith(
+      colorScheme: ColorScheme.dark(
+        primary: tema.primary,
+        onPrimary: Colors.white,
+        surface: tema.secondaryBackground,
+        onSurface: tema.primaryText,
+      ),
+      dialogBackgroundColor: tema.secondaryBackground,
+    );
+
+    final fecha = await showDatePicker(
+      context: context,
+      initialDate: base,
+      firstDate: DateTime.now().subtract(const Duration(days: 365)),
+      lastDate: DateTime.now(),
+      builder: (ctx, child) => Theme(data: temaOscuro, child: child!),
+    );
+    if (fecha == null || !mounted) return;
+
+    setState(() {
+      // Solo se pregunta la fecha, no la hora: se mantiene la que ya
+      // hubiera y solo cambia el día. Aplica a todo el entreno de ese día.
+      _fechaEditada =
+          DateTime(fecha.year, fecha.month, fecha.day, base.hour, base.minute);
+    });
+  }
+
+  Widget _selectorFecha() {
+    final tema = FlutterFlowTheme.of(context);
+    final f = _fechaEditada ?? DateTime.now();
+    final ahora = DateTime.now();
+    final esHoy =
+        f.year == ahora.year && f.month == ahora.month && f.day == ahora.day;
+    final texto = esHoy ? 'Hoy' : _fechaCorta(f);
+
+    return GestureDetector(
+      onTap: _elegirFecha,
+      child: Container(
+        margin: const EdgeInsets.only(bottom: 12),
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        decoration: BoxDecoration(
+          color: tema.secondaryBackground,
+          borderRadius: BorderRadius.circular(999),
+          border: Border.all(color: tema.alternate),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.event_rounded, size: 16, color: tema.secondaryText),
+            const SizedBox(width: 6),
+            Text(texto,
+                style: tema.bodySmall.copyWith(
+                    color: tema.primaryText, fontWeight: FontWeight.w600)),
+            const SizedBox(width: 6),
+            Icon(Icons.edit_rounded, size: 13, color: tema.secondaryText),
+          ],
+        ),
+      ),
+    );
+  }
+
   Widget _tarjetaEjercicio(int indice) {
     final tema = FlutterFlowTheme.of(context);
     final ejercicio = _ejercicios[indice];
@@ -1486,6 +1585,7 @@ class _RegistroEntrenoState extends State<RegistroEntreno> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
+                Align(alignment: Alignment.centerLeft, child: _selectorFecha()),
                 Container(
                   padding: const EdgeInsets.all(12),
                   decoration: BoxDecoration(
