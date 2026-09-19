@@ -85,6 +85,11 @@ workflows:
           /usr/libexec/PlistBuddy -c "Add :NSHealthShareUsageDescription string 'Esta app lee tus datos de salud (pasos, peso, calorias) para personalizar tus rutinas y dieta.'" "$PLIST"
           /usr/libexec/PlistBuddy -c "Delete :NSHealthUpdateUsageDescription" "$PLIST" 2>/dev/null || true
           /usr/libexec/PlistBuddy -c "Add :NSHealthUpdateUsageDescription string 'Esta app guarda tus entrenamientos y progreso en Apple Health.'" "$PLIST"
+          # Camara / fotos (image_picker)
+          /usr/libexec/PlistBuddy -c "Delete :NSPhotoLibraryUsageDescription" "$PLIST" 2>/dev/null || true
+          /usr/libexec/PlistBuddy -c "Add :NSPhotoLibraryUsageDescription string 'Esta app accede a tus fotos para adjuntar imagenes de comidas o progreso.'" "$PLIST"
+          /usr/libexec/PlistBuddy -c "Delete :NSCameraUsageDescription" "$PLIST" 2>/dev/null || true
+          /usr/libexec/PlistBuddy -c "Add :NSCameraUsageDescription string 'Esta app usa la camara para hacer fotos de tus comidas o progreso.'" "$PLIST"
           # Export compliance
           /usr/libexec/PlistBuddy -c "Delete :ITSAppUsesNonExemptEncryption" "$PLIST" 2>/dev/null || true
           /usr/libexec/PlistBuddy -c "Add :ITSAppUsesNonExemptEncryption bool false" "$PLIST"
