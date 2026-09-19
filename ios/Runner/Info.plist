@@ -18,6 +18,10 @@
 	<string>APPL</string>
 	<key>NSHealthShareUsageDescription</key>
 	<string>DictaFit necesita acceso a Salud para leer tus pasos y mostrar tu progreso diario.</string>
+	<key>NSCameraUsageDescription</key>
+	<string>DictaFit necesita la cámara para hacer fotos de las etiquetas de tus productos y leer sus datos nutricionales.</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>DictaFit necesita acceso a tus fotos para poder elegir una imagen ya hecha de la etiqueta de un producto.</string>
 	<key>CFBundleShortVersionString</key>
 	<string>$(FLUTTER_BUILD_NAME)</string>
 	<key>CFBundleSignature</key>

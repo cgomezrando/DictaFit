@@ -16,7 +16,13 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:http/http.dart' as http;
 import 'package:speech_to_text/speech_to_text.dart' as stt;
+import 'package:image_picker/image_picker.dart';
 
+/// Si el compilador se queja de que no encuentra
+/// 'package:image_picker/image_picker.dart', añádelo en Custom Pub
+/// Dependencies: image_picker: ^1.1.2 — y añade en Info.plist
+/// NSCameraUsageDescription y NSPhotoLibraryUsageDescription (el texto que
+/// verá el usuario al pedirle permiso de cámara/galería la primera vez).
 /// Si el compilador se queja de que no encuentra 'package:http/http.dart' o
 /// 'package:speech_to_text/speech_to_text.dart', añade ambos paquetes en
 /// Custom Pub Dependencies, igual que en RegistroEntreno.
@@ -123,6 +129,44 @@ class _ItemCatalogo {
   _ItemCatalogo(this.id, this.nombre);
 }
 
+class _ProductoPersonalizado {
+  final String id;
+  final String nombre;
+  final double kcal100;
+  final double proteina100;
+  final double carbos100;
+  final double grasa100;
+
+  _ProductoPersonalizado({
+    required this.id,
+    required this.nombre,
+    required this.kcal100,
+    this.proteina100 = 0,
+    this.carbos100 = 0,
+    this.grasa100 = 0,
+  });
+
+  factory _ProductoPersonalizado.desdeDoc(String id, Map<String, dynamic> j) =>
+      _ProductoPersonalizado(
+        id: id,
+        nombre: (j['nombre'] ?? 'Producto sin nombre').toString(),
+        kcal100: (j['kcal100'] as num?)?.toDouble() ?? 0,
+        proteina100: (j['proteina100'] as num?)?.toDouble() ?? 0,
+        carbos100: (j['carbos100'] as num?)?.toDouble() ?? 0,
+        grasa100: (j['grasa100'] as num?)?.toDouble() ?? 0,
+      );
+
+  /// Lo que entiende el backend en ProcesarComidaPeticion.alimentosPersonalizados.
+  Map<String, dynamic> aResumenPeticion() => {
+        'id': id,
+        'nombre': nombre,
+        'kcal100': kcal100,
+        'proteina100': proteina100,
+        'carbos100': carbos100,
+        'grasa100': grasa100,
+      };
+}
+
 const List<String> _tiposComida = [
   'desayuno',
   'comida',
@@ -197,6 +241,12 @@ class _RegistroComidaState extends State<RegistroComida> {
   bool get _modoEdicion => widget.comidaParaEditar != null;
 
   List<_ItemCatalogo> _catalogo = [];
+
+  /// Tus propios productos (foto de etiqueta), tal como se guardan en
+  /// users/{uid}/alimentosPersonalizados: {id, nombre, kcal100, proteina100,
+  /// carbos100, grasa100}.
+  List<Map<String, dynamic>> _personalizados = [];
+  List<_ProductoPersonalizado> _personalizados = [];
 
   final TextEditingController _controladorTexto = TextEditingController();
   String _textoEscuchado = '';
@@ -316,6 +366,7 @@ class _RegistroComidaState extends State<RegistroComida> {
 
       unawaited(_inicializarVoz());
       unawaited(_cargarCatalogo());
+      unawaited(_cargarPersonalizados());
 
       if (mounted) setState(() => _estado = estadoInicial);
     } catch (_) {
@@ -380,6 +431,34 @@ class _RegistroComidaState extends State<RegistroComida> {
       // Sin catálogo, el selector de alimento quedará limitado; no es bloqueante.
     }
   }
+
+  Future<void> _cargarPersonalizados() async {
+    final uid = FirebaseAuth.instance.currentUser?.uid;
+    if (uid == null) return;
+    try {
+      final snap = await FirebaseFirestore.instance
+          .collection('users')
+          .doc(uid)
+          .collection('alimentosPersonalizados')
+          .get();
+      final lista = snap.docs.map((d) => {'id': d.id, ...d.data()}).toList();
+      if (mounted) setState(() => _personalizados = lista);
+    } catch (_) {
+      // Sin tus productos, el reconocimiento por voz y el buscador solo
+      // tendrán el catálogo general; no es bloqueante.
+    }
+  }
+
+  List<Map<String, dynamic>> _personalizadosParaPeticion() => _personalizados
+      .map((p) => {
+            'id': p['id'],
+            'nombre': p['nombre'],
+            'kcal100': p['kcal100'] ?? 0,
+            'proteina100': p['proteina100'] ?? 0,
+            'carbos100': p['carbos100'] ?? 0,
+            'grasa100': p['grasa100'] ?? 0,
+          })
+      .toList();
 
   void _alCambiarEstadoVoz(String status) {
     if ((status == 'done' || status == 'notListening') &&
@@ -492,6 +571,353 @@ class _RegistroComidaState extends State<RegistroComida> {
     _procesar(texto);
   }
 
+  InputDecoration _decoracionCampoProducto(String etiqueta) {
+    final tema = FlutterFlowTheme.of(context);
+    return InputDecoration(
+      labelText: etiqueta,
+      labelStyle: TextStyle(color: tema.secondaryText),
+      filled: true,
+      fillColor: tema.primaryBackground,
+      contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      border: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(12),
+        borderSide: BorderSide(color: tema.alternate),
+      ),
+    );
+  }
+
+  /// Hace o elige una foto de la etiqueta de un producto, se la manda al
+  /// backend para leerla, y muestra el resultado en un formulario editable
+  /// antes de guardarlo como producto propio y añadirlo a esta comida.
+  Future<void> _fotoDeProducto() async {
+    final tema = FlutterFlowTheme.of(context);
+    final origen = await showModalBottomSheet<ImageSource>(
+      context: context,
+      backgroundColor: tema.secondaryBackground,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      builder: (ctx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              leading: Icon(Icons.camera_alt_rounded, color: tema.primaryText),
+              title: Text('Hacer una foto',
+                  style: TextStyle(color: tema.primaryText)),
+              onTap: () => Navigator.of(ctx).pop(ImageSource.camera),
+            ),
+            ListTile(
+              leading:
+                  Icon(Icons.photo_library_rounded, color: tema.primaryText),
+              title: Text('Elegir de la galería',
+                  style: TextStyle(color: tema.primaryText)),
+              onTap: () => Navigator.of(ctx).pop(ImageSource.gallery),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (origen == null) return;
+
+    XFile? archivo;
+    try {
+      // maxWidth + imageQuality recortan el tamaño antes de subirla: la
+      // lectura por IA cobra por píxeles, así que no conviene mandar la
+      // foto de la cámara sin comprimir.
+      archivo = await ImagePicker()
+          .pickImage(source: origen, maxWidth: 1200, imageQuality: 82);
+    } catch (_) {
+      _mostrarMensaje('No se ha podido acceder a la cámara o la galería.');
+      return;
+    }
+    if (archivo == null) return;
+
+    final tema2 = FlutterFlowTheme.of(context);
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => Center(
+        child: Container(
+          padding: const EdgeInsets.all(20),
+          decoration: BoxDecoration(
+              color: tema2.secondaryBackground,
+              borderRadius: BorderRadius.circular(18)),
+          child: Column(mainAxisSize: MainAxisSize.min, children: [
+            CircularProgressIndicator(color: tema2.secondary),
+            const SizedBox(height: 14),
+            Text('Leyendo la etiqueta...',
+                style: TextStyle(color: tema2.primaryText)),
+          ]),
+        ),
+      ),
+    );
+
+    try {
+      final bytes = await archivo.readAsBytes();
+      final base64Imagen = base64Encode(bytes);
+      final tipoImagen = archivo.name.toLowerCase().endsWith('.png')
+          ? 'image/png'
+          : 'image/jpeg';
+
+      final json =
+          await _llamarBackend('/v1/alimentos-personalizados/leer-etiqueta', {
+        'imagenBase64': base64Imagen,
+        'tipoImagen': tipoImagen,
+      });
+      if (!mounted) return;
+      Navigator.of(context).pop(); // cierra "Leyendo la etiqueta..."
+      _notasRestantes =
+          (json['notasRestantes'] as num?)?.toInt() ?? _notasRestantes;
+      await _confirmarProductoLeido(json);
+    } on _ErrorApi catch (e) {
+      if (!mounted) return;
+      Navigator.of(context).pop();
+      _mostrarMensaje(e.mensaje);
+    } catch (_) {
+      if (!mounted) return;
+      Navigator.of(context).pop();
+      _mostrarMensaje('No se ha podido leer la etiqueta. Inténtalo de nuevo.');
+    }
+  }
+
+  Future<void> _confirmarProductoLeido(Map<String, dynamic> datos) async {
+    final tema = FlutterFlowTheme.of(context);
+    final controladorNombre =
+        TextEditingController(text: (datos['nombre'] ?? '').toString());
+    final controladorKcal = TextEditingController(
+        text: _numeroCorto((datos['kcal100'] as num?)?.toDouble() ?? 0));
+    final controladorProteina = TextEditingController(
+        text: _numeroCorto((datos['proteina100'] as num?)?.toDouble() ?? 0));
+    final controladorCarbos = TextEditingController(
+        text: _numeroCorto((datos['carbos100'] as num?)?.toDouble() ?? 0));
+    final controladorGrasa = TextEditingController(
+        text: _numeroCorto((datos['grasa100'] as num?)?.toDouble() ?? 0));
+    final confiable = datos['confiable'] != false;
+    final aviso = (datos['aviso'] ?? '').toString();
+
+    final guardar = await showModalBottomSheet<bool>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: tema.secondaryBackground,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      builder: (ctx) => Padding(
+        padding: EdgeInsets.only(
+          left: 20,
+          right: 20,
+          top: 16,
+          bottom: MediaQuery.of(ctx).viewInsets.bottom + 16,
+        ),
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Text('Revisa los datos',
+                  style: tema.titleMedium.copyWith(
+                      color: tema.primaryText, fontWeight: FontWeight.w700)),
+              const SizedBox(height: 6),
+              Text(
+                  'Valores por 100 g/100 ml. Corrígelos si algo no coincide con el envase.',
+                  style: tema.bodySmall.copyWith(color: tema.secondaryText)),
+              if (!confiable) ...[
+                const SizedBox(height: 10),
+                Container(
+                  padding: const EdgeInsets.all(10),
+                  decoration: BoxDecoration(
+                      color: _tinte(tema.warning, 0.14),
+                      borderRadius: BorderRadius.circular(12)),
+                  child: Row(children: [
+                    Icon(Icons.error_outline_rounded,
+                        size: 18, color: tema.warning),
+                    const SizedBox(width: 8),
+                    Expanded(
+                        child: Text(
+                            aviso.isEmpty
+                                ? 'La foto no se veía del todo bien; revisa los números.'
+                                : aviso,
+                            style: tema.bodySmall
+                                .copyWith(color: tema.primaryText))),
+                  ]),
+                ),
+              ],
+              const SizedBox(height: 14),
+              TextField(
+                controller: controladorNombre,
+                style: TextStyle(color: tema.primaryText),
+                decoration: _decoracionCampoProducto('Nombre del producto'),
+              ),
+              const SizedBox(height: 10),
+              Row(children: [
+                Expanded(
+                  child: TextField(
+                    controller: controladorKcal,
+                    keyboardType:
+                        const TextInputType.numberWithOptions(decimal: true),
+                    style: TextStyle(color: tema.primaryText),
+                    decoration: _decoracionCampoProducto('kcal/100'),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: TextField(
+                    controller: controladorProteina,
+                    keyboardType:
+                        const TextInputType.numberWithOptions(decimal: true),
+                    style: TextStyle(color: tema.primaryText),
+                    decoration: _decoracionCampoProducto('Proteína g'),
+                  ),
+                ),
+              ]),
+              const SizedBox(height: 8),
+              Row(children: [
+                Expanded(
+                  child: TextField(
+                    controller: controladorCarbos,
+                    keyboardType:
+                        const TextInputType.numberWithOptions(decimal: true),
+                    style: TextStyle(color: tema.primaryText),
+                    decoration: _decoracionCampoProducto('Carbos g'),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: TextField(
+                    controller: controladorGrasa,
+                    keyboardType:
+                        const TextInputType.numberWithOptions(decimal: true),
+                    style: TextStyle(color: tema.primaryText),
+                    decoration: _decoracionCampoProducto('Grasa g'),
+                  ),
+                ),
+              ]),
+              const SizedBox(height: 16),
+              _botonPrincipal('Guardar producto', () {
+                if (controladorNombre.text.trim().isEmpty) return;
+                Navigator.of(ctx).pop(true);
+              }),
+            ],
+          ),
+        ),
+      ),
+    );
+
+    if (guardar != true) return;
+
+    final nombre = controladorNombre.text.trim();
+    final kcal100 =
+        double.tryParse(controladorKcal.text.replaceAll(',', '.')) ?? 0;
+    final proteina100 =
+        double.tryParse(controladorProteina.text.replaceAll(',', '.')) ?? 0;
+    final carbos100 =
+        double.tryParse(controladorCarbos.text.replaceAll(',', '.')) ?? 0;
+    final grasa100 =
+        double.tryParse(controladorGrasa.text.replaceAll(',', '.')) ?? 0;
+
+    final uid = FirebaseAuth.instance.currentUser?.uid;
+    String? nuevoId;
+    if (uid != null) {
+      try {
+        final ref = await FirebaseFirestore.instance
+            .collection('users')
+            .doc(uid)
+            .collection('alimentosPersonalizados')
+            .add({
+          'nombre': nombre,
+          'kcal100': kcal100,
+          'proteina100': proteina100,
+          'carbos100': carbos100,
+          'grasa100': grasa100,
+          'fechaCreado': FieldValue.serverTimestamp(),
+        });
+        nuevoId = ref.id;
+        if (mounted) {
+          setState(() => _personalizados.add({
+                'id': nuevoId,
+                'nombre': nombre,
+                'kcal100': kcal100,
+                'proteina100': proteina100,
+                'carbos100': carbos100,
+                'grasa100': grasa100,
+              }));
+        }
+      } catch (_) {
+        _mostrarMensaje(
+            'No se ha podido guardar el producto para la próxima vez; se añade solo a esta comida.',
+            esError: false);
+      }
+    }
+
+    final gramos = await _pedirGramos(nombre);
+    if (gramos == null || gramos <= 0 || !mounted) return;
+    setState(() {
+      _alimentos.add(_AlimentoEdit(
+        alimentoId: nuevoId ?? 'desconocido',
+        nombre: nombre,
+        gramos: gramos,
+        kcal100: kcal100,
+        proteina100: proteina100,
+        carbos100: carbos100,
+        grasa100: grasa100,
+        kcal: round1(kcal100 * gramos / 100),
+        proteinaG: round1(proteina100 * gramos / 100),
+        carbosG: round1(carbos100 * gramos / 100),
+        grasaG: round1(grasa100 * gramos / 100),
+        tipo: _detectarTipoComida(_fechaEditada ?? DateTime.now()),
+      ));
+    });
+  }
+
+  double round1(double v) => (v * 10).round() / 10;
+
+  Future<double?> _pedirGramos(String nombreProducto) async {
+    final tema = FlutterFlowTheme.of(context);
+    final controlador = TextEditingController();
+    final gramos = await showModalBottomSheet<double>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: tema.secondaryBackground,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      builder: (ctx) => Padding(
+        padding: EdgeInsets.only(
+          left: 20,
+          right: 20,
+          top: 16,
+          bottom: MediaQuery.of(ctx).viewInsets.bottom + 16,
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Text('¿Cuánto vas a tomar de "$nombreProducto"?',
+                style: tema.titleSmall.copyWith(
+                    color: tema.primaryText, fontWeight: FontWeight.w700)),
+            const SizedBox(height: 12),
+            TextField(
+              controller: controlador,
+              autofocus: true,
+              keyboardType:
+                  const TextInputType.numberWithOptions(decimal: true),
+              style: TextStyle(color: tema.primaryText),
+              decoration: _decoracionCampoProducto('Gramos o mililitros'),
+            ),
+            const SizedBox(height: 14),
+            _botonPrincipal('Añadir a la comida', () {
+              final valor =
+                  double.tryParse(controlador.text.replaceAll(',', '.'));
+              Navigator.of(ctx).pop(valor);
+            }),
+          ],
+        ),
+      ),
+    );
+    return gramos;
+  }
+
   // ---------- Llamadas al backend ----------
 
   Future<Map<String, dynamic>> _llamarBackend(
@@ -542,6 +968,7 @@ class _RegistroComidaState extends State<RegistroComida> {
       final json = await _llamarBackend('/v1/comida/procesar', {
         'texto': texto,
         'pesoAlimentos': _pesoAlimentos,
+        'alimentosPersonalizados': _personalizadosParaPeticion(),
       });
       final alimentosNuevos = ((json['alimentos'] as List?) ?? [])
           .map((a) =>
@@ -591,6 +1018,7 @@ class _RegistroComidaState extends State<RegistroComida> {
     try {
       final json = await _llamarBackend('/v1/comida/calcular', {
         'alimentos': _alimentos.map((a) => a.aPeticion()).toList(),
+        'alimentosPersonalizados': _personalizadosParaPeticion(),
       });
       final recalculados = ((json['alimentos'] as List?) ?? [])
           .map((a) =>
@@ -651,6 +1079,7 @@ class _RegistroComidaState extends State<RegistroComida> {
     try {
       final json = await _llamarBackend('/v1/comida/calcular', {
         'alimentos': _alimentos.map((a) => a.aPeticion()).toList(),
+        'alimentosPersonalizados': _personalizadosParaPeticion(),
       });
       final recalculados = ((json['alimentos'] as List?) ?? [])
           .map((a) =>
@@ -1613,27 +2042,33 @@ class _RegistroComidaState extends State<RegistroComida> {
                 const SizedBox(height: 16),
                 if (_alimentos.isNotEmpty) _resumenTotales(),
                 ..._seccionesAgrupadas(),
+                TextButton.icon(
+                  onPressed: _vozDisponible ? _empezarEscucha : _dictarMasTexto,
+                  icon: Icon(
+                      _vozDisponible
+                          ? Icons.mic_rounded
+                          : Icons.edit_note_rounded,
+                      color: tema.secondary),
+                  label: Text('Dictar más',
+                      style: TextStyle(color: tema.secondary)),
+                ),
                 Row(
                   children: [
-                    Expanded(
-                      child: TextButton.icon(
-                        onPressed:
-                            _vozDisponible ? _empezarEscucha : _dictarMasTexto,
-                        icon: Icon(
-                            _vozDisponible
-                                ? Icons.mic_rounded
-                                : Icons.edit_note_rounded,
-                            color: tema.secondary),
-                        label: Text('Dictar más',
-                            style: TextStyle(color: tema.secondary)),
-                      ),
-                    ),
                     Expanded(
                       child: TextButton.icon(
                         onPressed: _agregarAlimentoVacio,
                         icon: Icon(Icons.add_circle_outline_rounded,
                             color: tema.secondaryText),
                         label: Text('Añadir manual',
+                            style: TextStyle(color: tema.secondaryText)),
+                      ),
+                    ),
+                    Expanded(
+                      child: TextButton.icon(
+                        onPressed: _fotoDeProducto,
+                        icon: Icon(Icons.camera_alt_outlined,
+                            color: tema.secondaryText),
+                        label: Text('Foto de producto',
                             style: TextStyle(color: tema.secondaryText)),
                       ),
                     ),
