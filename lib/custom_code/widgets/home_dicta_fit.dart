@@ -15,6 +15,11 @@ import 'package:firebase_auth/firebase_auth.dart';
 import '/auth/firebase_auth/auth_util.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 import 'package:health/health.dart';
+import 'package:firebase_messaging/firebase_messaging.dart';
+
+/// Si el compilador se queja de que no encuentra
+/// 'package:firebase_messaging/firebase_messaging.dart', añádelo en Custom
+/// Pub Dependencies: firebase_messaging: ^15.1.3
 import 'dart:async';
 
 /// Si el compilador se queja de que no encuentra 'package:health/health.dart',
@@ -63,6 +68,7 @@ class _HomeDictaFitState extends State<HomeDictaFit> {
     final uid = FirebaseAuth.instance.currentUser?.uid;
     if (uid == null) return;
     unawaited(_sincronizarPasos(uid));
+    unawaited(_registrarTokenNotificaciones(uid));
 
     final userRef = FirebaseFirestore.instance.collection('users').doc(uid);
     final ahora = DateTime.now();
@@ -162,6 +168,50 @@ class _HomeDictaFitState extends State<HomeDictaFit> {
   /// verdad: se hace cada vez que abres Home, así que el aviso de las 12:00
   /// y las 18:00 usará el último dato que hayas subido así, no el pulso
   /// exacto de ese momento si no tenías la app abierta hace poco.
+  /// Pide permiso de notificaciones, guarda el token de FCM en tu perfil
+  /// (para que el backend sepa a quién mandarle el aviso de pasos de las
+  /// 12:00 y las 18:00), y se mantiene al día si el token cambia — algo
+  /// que Apple/Firebase pueden hacer solos de vez en cuando.
+  Future<void> _registrarTokenNotificaciones(String uid) async {
+    try {
+      final mensajeria = FirebaseMessaging.instance;
+      final permiso = await mensajeria.requestPermission(
+        alert: true,
+        badge: true,
+        sound: true,
+      );
+      if (permiso.authorizationStatus != AuthorizationStatus.authorized &&
+          permiso.authorizationStatus != AuthorizationStatus.provisional) {
+        return;
+      }
+
+      // Para que un aviso también se vea si la app está abierta en ese momento.
+      await mensajeria.setForegroundNotificationPresentationOptions(
+        alert: true,
+        badge: true,
+        sound: true,
+      );
+
+      final token = await mensajeria.getToken();
+      if (token != null) {
+        await FirebaseFirestore.instance
+            .collection('users')
+            .doc(uid)
+            .set({'fcmToken': token}, SetOptions(merge: true));
+      }
+
+      mensajeria.onTokenRefresh.listen((nuevoToken) {
+        FirebaseFirestore.instance
+            .collection('users')
+            .doc(uid)
+            .set({'fcmToken': nuevoToken}, SetOptions(merge: true));
+      });
+    } catch (_) {
+      // Sin token guardado, simplemente no llegarán avisos push; no bloquea
+      // el resto de Home.
+    }
+  }
+
   Future<void> _sincronizarPasos(String uid) async {
     try {
       final salud = Health();

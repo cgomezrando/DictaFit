@@ -846,7 +846,9 @@ class _PerfilUsuarioState extends State<PerfilUsuario> {
               children: [
                 Expanded(
                   child: _campoTexto(_alturaController, 'Altura',
-                      teclado: TextInputType.number, sufijo: 'cm'),
+                      teclado: TextInputType.number,
+                      sufijo: 'cm',
+                      onCambiar: (_) => setState(() {})),
                 ),
                 const SizedBox(width: 10),
                 Expanded(
