@@ -59,13 +59,17 @@ workflows:
             sed -i '' -E "s/^platform :ios.*/platform :ios, '15.0'/" ios/Podfile
           fi
 
-      - name: Configure HealthKit entitlement
+      - name: Configure entitlements (HealthKit + Push)
         script: |
           ENT="ios/Runner/Runner.entitlements"
+          # HealthKit
           /usr/libexec/PlistBuddy -c "Delete :com.apple.developer.healthkit" "$ENT" 2>/dev/null || true
           /usr/libexec/PlistBuddy -c "Add :com.apple.developer.healthkit bool true" "$ENT"
           /usr/libexec/PlistBuddy -c "Delete :com.apple.developer.healthkit.access" "$ENT" 2>/dev/null || true
           /usr/libexec/PlistBuddy -c "Add :com.apple.developer.healthkit.access array" "$ENT"
+          # Push notifications (firebase_messaging)
+          /usr/libexec/PlistBuddy -c "Delete :aps-environment" "$ENT" 2>/dev/null || true
+          /usr/libexec/PlistBuddy -c "Add :aps-environment string production" "$ENT"
           echo "Entitlements:"; cat "$ENT"
 
       - name: Portrait-only + privacy strings + export compliance
@@ -80,7 +84,7 @@ workflows:
           /usr/libexec/PlistBuddy -c "Add :NSMicrophoneUsageDescription string 'Esta app usa el microfono para dictar tus ejercicios y comidas por voz.'" "$PLIST"
           /usr/libexec/PlistBuddy -c "Delete :NSSpeechRecognitionUsageDescription" "$PLIST" 2>/dev/null || true
           /usr/libexec/PlistBuddy -c "Add :NSSpeechRecognitionUsageDescription string 'Esta app usa el reconocimiento de voz para convertir lo que dictas en texto.'" "$PLIST"
-          # HealthKit (obligatorio si usas health)
+          # HealthKit
           /usr/libexec/PlistBuddy -c "Delete :NSHealthShareUsageDescription" "$PLIST" 2>/dev/null || true
           /usr/libexec/PlistBuddy -c "Add :NSHealthShareUsageDescription string 'Esta app lee tus datos de salud (pasos, peso, calorias) para personalizar tus rutinas y dieta.'" "$PLIST"
           /usr/libexec/PlistBuddy -c "Delete :NSHealthUpdateUsageDescription" "$PLIST" 2>/dev/null || true
