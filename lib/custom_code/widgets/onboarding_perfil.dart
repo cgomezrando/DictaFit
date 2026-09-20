@@ -213,6 +213,8 @@ class _OnboardingPerfilState extends State<OnboardingPerfil> {
       _fechaNacimiento!,
       _actividad!,
       _objetivo!,
+      null,
+      null,
     );
 
     setState(() {

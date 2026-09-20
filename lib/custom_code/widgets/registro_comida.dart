@@ -1215,6 +1215,163 @@ class _RegistroComidaState extends State<RegistroComida> {
         tipo: _detectarTipoComida(_fechaEditada ?? DateTime.now()))));
   }
 
+  /// Edita el nombre y los macros de un producto ya guardado (foto de
+  /// etiqueta). `refrescarLista` es el setState del propio buscador, para
+  /// que el cambio se vea al momento sin tener que cerrarlo y reabrirlo.
+  Future<void> _editarProductoPersonalizado(
+      String id, void Function(void Function()) refrescarLista) async {
+    final tema = FlutterFlowTheme.of(context);
+    final actual =
+        _personalizados.firstWhere((p) => p['id'] == id, orElse: () => {});
+    if (actual.isEmpty) return;
+
+    final controladorNombre =
+        TextEditingController(text: (actual['nombre'] ?? '').toString());
+    final controladorKcal = TextEditingController(
+        text: _numeroCorto((actual['kcal100'] as num?)?.toDouble() ?? 0));
+    final controladorProteina = TextEditingController(
+        text: _numeroCorto((actual['proteina100'] as num?)?.toDouble() ?? 0));
+    final controladorCarbos = TextEditingController(
+        text: _numeroCorto((actual['carbos100'] as num?)?.toDouble() ?? 0));
+    final controladorGrasa = TextEditingController(
+        text: _numeroCorto((actual['grasa100'] as num?)?.toDouble() ?? 0));
+
+    final guardar = await showModalBottomSheet<bool>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: tema.secondaryBackground,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      builder: (ctx) => Padding(
+        padding: EdgeInsets.only(
+          left: 20,
+          right: 20,
+          top: 16,
+          bottom: MediaQuery.of(ctx).viewInsets.bottom + 16,
+        ),
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Text('Editar producto',
+                  style: tema.titleMedium.copyWith(
+                      color: tema.primaryText, fontWeight: FontWeight.w700)),
+              const SizedBox(height: 6),
+              Text('Valores por 100 g/100 ml.',
+                  style: tema.bodySmall.copyWith(color: tema.secondaryText)),
+              const SizedBox(height: 14),
+              TextField(
+                controller: controladorNombre,
+                style: TextStyle(color: tema.primaryText),
+                decoration: _decoracionCampoProducto('Nombre del producto'),
+              ),
+              const SizedBox(height: 10),
+              Row(children: [
+                Expanded(
+                  child: TextField(
+                    controller: controladorKcal,
+                    keyboardType:
+                        const TextInputType.numberWithOptions(decimal: true),
+                    style: TextStyle(color: tema.primaryText),
+                    decoration: _decoracionCampoProducto('kcal/100'),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: TextField(
+                    controller: controladorProteina,
+                    keyboardType:
+                        const TextInputType.numberWithOptions(decimal: true),
+                    style: TextStyle(color: tema.primaryText),
+                    decoration: _decoracionCampoProducto('Proteína g'),
+                  ),
+                ),
+              ]),
+              const SizedBox(height: 8),
+              Row(children: [
+                Expanded(
+                  child: TextField(
+                    controller: controladorCarbos,
+                    keyboardType:
+                        const TextInputType.numberWithOptions(decimal: true),
+                    style: TextStyle(color: tema.primaryText),
+                    decoration: _decoracionCampoProducto('Carbos g'),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: TextField(
+                    controller: controladorGrasa,
+                    keyboardType:
+                        const TextInputType.numberWithOptions(decimal: true),
+                    style: TextStyle(color: tema.primaryText),
+                    decoration: _decoracionCampoProducto('Grasa g'),
+                  ),
+                ),
+              ]),
+              const SizedBox(height: 16),
+              _botonPrincipal('Guardar cambios', () {
+                if (controladorNombre.text.trim().isEmpty) return;
+                Navigator.of(ctx).pop(true);
+              }),
+            ],
+          ),
+        ),
+      ),
+    );
+
+    if (guardar != true) return;
+
+    final nombre = controladorNombre.text.trim();
+    final kcal100 =
+        double.tryParse(controladorKcal.text.replaceAll(',', '.')) ?? 0;
+    final proteina100 =
+        double.tryParse(controladorProteina.text.replaceAll(',', '.')) ?? 0;
+    final carbos100 =
+        double.tryParse(controladorCarbos.text.replaceAll(',', '.')) ?? 0;
+    final grasa100 =
+        double.tryParse(controladorGrasa.text.replaceAll(',', '.')) ?? 0;
+
+    final uid = FirebaseAuth.instance.currentUser?.uid;
+    if (uid != null) {
+      try {
+        await FirebaseFirestore.instance
+            .collection('users')
+            .doc(uid)
+            .collection('alimentosPersonalizados')
+            .doc(id)
+            .set({
+          'nombre': nombre,
+          'kcal100': kcal100,
+          'proteina100': proteina100,
+          'carbos100': carbos100,
+          'grasa100': grasa100,
+        }, SetOptions(merge: true));
+      } catch (_) {
+        _mostrarMensaje(
+            'No se ha podido guardar el cambio. Inténtalo de nuevo.');
+        return;
+      }
+    }
+
+    setState(() {
+      final i = _personalizados.indexWhere((p) => p['id'] == id);
+      if (i != -1) {
+        _personalizados[i] = {
+          ..._personalizados[i],
+          'nombre': nombre,
+          'kcal100': kcal100,
+          'proteina100': proteina100,
+          'carbos100': carbos100,
+          'grasa100': grasa100,
+        };
+      }
+    });
+    refrescarLista(() {});
+  }
+
   Future<void> _elegirAlimento(int indice) async {
     final tema = FlutterFlowTheme.of(context);
     final controlador = TextEditingController();
@@ -1290,18 +1447,36 @@ class _RegistroComidaState extends State<RegistroComida> {
                                     style: tema.bodyMedium
                                         .copyWith(color: tema.primaryText)),
                                 trailing: item.esTuyo
-                                    ? Container(
-                                        padding: const EdgeInsets.symmetric(
-                                            horizontal: 8, vertical: 3),
-                                        decoration: BoxDecoration(
-                                          color: _tinte(tema.secondary, 0.16),
-                                          borderRadius:
-                                              BorderRadius.circular(999),
-                                        ),
-                                        child: Text('Tuyo',
-                                            style: tema.bodySmall.copyWith(
-                                                color: tema.secondary,
-                                                fontWeight: FontWeight.w600)),
+                                    ? Row(
+                                        mainAxisSize: MainAxisSize.min,
+                                        children: [
+                                          Container(
+                                            padding: const EdgeInsets.symmetric(
+                                                horizontal: 8, vertical: 3),
+                                            decoration: BoxDecoration(
+                                              color:
+                                                  _tinte(tema.secondary, 0.16),
+                                              borderRadius:
+                                                  BorderRadius.circular(999),
+                                            ),
+                                            child: Text('Tuyo',
+                                                style: tema.bodySmall.copyWith(
+                                                    color: tema.secondary,
+                                                    fontWeight:
+                                                        FontWeight.w600)),
+                                          ),
+                                          IconButton(
+                                            onPressed: () =>
+                                                _editarProductoPersonalizado(
+                                                    item.id, setSheet),
+                                            icon: Icon(Icons.edit_rounded,
+                                                size: 17,
+                                                color: tema.secondaryText),
+                                            constraints: const BoxConstraints(
+                                                minWidth: 32, minHeight: 32),
+                                            padding: EdgeInsets.zero,
+                                          ),
+                                        ],
                                       )
                                     : null,
                                 onTap: () => Navigator.of(ctx).pop(item),

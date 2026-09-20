@@ -13,6 +13,8 @@ import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:fl_chart/fl_chart.dart';
+import 'package:health/health.dart';
+import 'dart:async';
 import 'package:flutter_svg/flutter_svg.dart';
 import 'dart:math' as math;
 
@@ -86,6 +88,13 @@ class _EstadisticasEntrenoState extends State<EstadisticasEntreno> {
   /// Pasos diarios del último año (colección "pasos"; no confundir con
   /// "pesos", que es el peso corporal). Se cargan una vez, y de ahí se
   /// sacan las medias de semana/mes/6 meses/año.
+  /// Medias de pasos por periodo, sacadas directamente de HealthKit (no de
+  /// nuestro propio Firestore, que solo guarda un corte parcial del día
+  /// cada vez que abres Home). null = todavía cargando. Si no hay permiso
+  /// de Salud, se rellena con el respaldo de Firestore, avisando de que
+  /// puede estar incompleto.
+  Map<int, double>? _mediasPasos;
+  bool _pasosSinPermiso = false;
   List<Map<String, dynamic>>? _pasosRecientes;
 
   /// Comidas del último año, para las medias de calorías/macros. A
@@ -109,6 +118,8 @@ class _EstadisticasEntrenoState extends State<EstadisticasEntreno> {
       _cargarEntrenosRecientes(uid);
       _cargarPasosRecientes(uid);
       _cargarComidasRecientes(uid);
+      unawaited(_cargarPasosDesdeHealthKit());
+      _cargarPerfil(uid);
     }
   }
 
@@ -145,6 +156,43 @@ class _EstadisticasEntrenoState extends State<EstadisticasEntreno> {
     });
   }
 
+  /// Pide a HealthKit el total de pasos de cada periodo y calcula la media
+  /// diaria real, en vez de depender de lo que hayamos ido guardando en
+  /// Firestore a trozos (que puede faltarle el final del día).
+  Future<void> _cargarPasosDesdeHealthKit() async {
+    try {
+      final salud = Health();
+      await salud.configure();
+      final autorizado =
+          await salud.requestAuthorization([HealthDataType.STEPS]);
+      if (!autorizado) {
+        if (mounted) setState(() => _pasosSinPermiso = true);
+        return;
+      }
+      final ahora = DateTime.now();
+      final resultado = <int, double>{};
+      for (final dias in [7, 30, 182, 365]) {
+        final desde = ahora.subtract(Duration(days: dias));
+        final total = await salud.getTotalStepsInInterval(desde, ahora);
+        resultado[dias] = (total ?? 0) / dias;
+      }
+      if (mounted) setState(() => _mediasPasos = resultado);
+    } catch (_) {
+      if (mounted) setState(() => _pasosSinPermiso = true);
+    }
+  }
+
+  Map<String, dynamic>? _perfilUsuario;
+
+  void _cargarPerfil(String uid) {
+    FirebaseFirestore.instance.collection('users').doc(uid).get().then((doc) {
+      if (!mounted) return;
+      setState(() => _perfilUsuario = doc.data() ?? {});
+    }).catchError((_) {
+      if (mounted) setState(() => _perfilUsuario = {});
+    });
+  }
+
   void _cargarComidasRecientes(String uid) {
     final desde = DateTime.now().subtract(const Duration(days: 370));
     FirebaseFirestore.instance
@@ -162,9 +210,10 @@ class _EstadisticasEntrenoState extends State<EstadisticasEntreno> {
     });
   }
 
-  /// Media de pasos/día en los últimos [dias] días (solo cuenta los días
-  /// que de verdad tienen un registro; si no hay ninguno, null).
-  double? _mediaPasos(int dias) {
+  /// Respaldo si no hay permiso de HealthKit: media a partir de lo
+  /// guardado en Firestore, que puede estar incompleto (ver
+  /// _cargarPasosDesdeHealthKit). Solo se usa cuando ese respaldo falla.
+  double? _mediaPasosFirestore(int dias) {
     if (_pasosRecientes == null || _pasosRecientes!.isEmpty) return null;
     final desde = DateTime.now().subtract(Duration(days: dias));
     final valores = _pasosRecientes!
@@ -212,6 +261,11 @@ class _EstadisticasEntrenoState extends State<EstadisticasEntreno> {
 
   /// Media diaria de kcal/macros en los últimos [dias] días (solo cuenta
   /// los días que de verdad tienen alguna comida guardada).
+  /// Media diaria de kcal/macros en los últimos [dias] días. Exige un
+  /// mínimo de días con datos dentro de la ventana (al menos el 10%, y 2
+  /// como mínimo absoluto): un solo desayuno de ayer no debe presentarse
+  /// como si fuera "tu media del último año", aunque matemáticamente esa
+  /// única cifra "sea" la media de una muestra de tamaño 1.
   Map<String, double>? _mediaNutricion(int dias) {
     final porDia = _totalesNutricionPorDia();
     if (porDia.isEmpty) return null;
@@ -220,7 +274,8 @@ class _EstadisticasEntrenoState extends State<EstadisticasEntreno> {
         .where((d) => DateTime.fromMillisecondsSinceEpoch(d['ts']!.toInt())
             .isAfter(desde))
         .toList();
-    if (diasEnVentana.isEmpty) return null;
+    final minimoDias = math.max(2, (dias * 0.1).round());
+    if (diasEnVentana.length < minimoDias) return null;
     double suma(String campo) =>
         diasEnVentana.fold(0.0, (s, d) => s + (d[campo] ?? 0));
     final n = diasEnVentana.length;
@@ -799,6 +854,43 @@ class _EstadisticasEntrenoState extends State<EstadisticasEntreno> {
         '52 420 43 407 36Z',
   };
 
+  /// Los músculos con menos intensidad esta semana, contando también los
+  /// que no aparecen en ningún ejercicio (intensidad 0). Se agrupan
+  /// pectoral/deltoides en un único "Pectoral" / "Deltoides" para que la
+  /// lista sea legible, no 19 entradas sueltas.
+  List<String> _musculosMenosTrabajados(Map<String, double> intensidades,
+      {int cuantos = 3}) {
+    const gruposVisibles = {
+      'pectoral_clavicular': 'Pectoral',
+      'pectoral_esternal': 'Pectoral',
+      'deltoides_anterior': 'Deltoides',
+      'deltoides_lateral': 'Deltoides',
+      'deltoides_posterior': 'Deltoides',
+      'triceps': 'Tríceps',
+      'biceps': 'Bíceps',
+      'antebrazo': 'Antebrazo',
+      'dorsal': 'Espalda (dorsal)',
+      'trapecio': 'Trapecio',
+      'romboides': 'Romboides',
+      'lumbar': 'Lumbar',
+      'abdominal': 'Abdominales',
+      'oblicuos': 'Oblicuos',
+      'gluteo': 'Glúteo',
+      'cuadriceps': 'Cuádriceps',
+      'isquiotibiales': 'Isquiotibiales',
+      'aductores': 'Aductores',
+      'gemelos': 'Gemelos',
+    };
+    final porGrupo = <String, double>{};
+    gruposVisibles.forEach((id, grupo) {
+      final valor = intensidades[id] ?? 0;
+      porGrupo[grupo] = math.max(porGrupo[grupo] ?? 0, valor);
+    });
+    final ordenado = porGrupo.entries.toList()
+      ..sort((a, b) => a.value.compareTo(b.value));
+    return ordenado.take(cuantos).map((e) => e.key).toList();
+  }
+
   static const List<Color> _paradasCalor = [
     Color(0xFF22C55E), // verde
     Color(0xFFEAB308), // amarillo
@@ -988,6 +1080,32 @@ class _EstadisticasEntrenoState extends State<EstadisticasEntreno> {
             ),
             const SizedBox(height: 12),
             _leyendaSemanal(),
+            const SizedBox(height: 14),
+            Divider(color: tema.alternate),
+            const SizedBox(height: 10),
+            Text('Menos trabajados esta semana',
+                style: tema.bodySmall.copyWith(
+                    color: tema.secondaryText, fontWeight: FontWeight.w600)),
+            const SizedBox(height: 8),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: _musculosMenosTrabajados(intensidades)
+                  .map((nombre) => Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 10, vertical: 6),
+                        decoration: BoxDecoration(
+                          color: _tinte(tema.warning, 0.12),
+                          borderRadius: BorderRadius.circular(999),
+                          border: Border.all(color: _tinte(tema.warning, 0.4)),
+                        ),
+                        child: Text(nombre,
+                            style: tema.bodySmall.copyWith(
+                                color: tema.primaryText,
+                                fontWeight: FontWeight.w600)),
+                      ))
+                  .toList(),
+            ),
           ],
         ],
       ),
@@ -1208,8 +1326,7 @@ class _EstadisticasEntrenoState extends State<EstadisticasEntreno> {
           sufijo: '%',
           etiquetaVacio:
               'Rellena cuello y cintura (y cadera si aplica) en Perfil, más de una vez, '
-              'para ver aquí la evolución. Es una estimación (método de la Marina de '
-              'EE. UU.), no una medición real.',
+              'para ver aquí la evolución.',
           primeraFecha: primeraGrasa,
           ultimaFecha: ultimaGrasa,
         ),
@@ -1276,6 +1393,232 @@ class _EstadisticasEntrenoState extends State<EstadisticasEntreno> {
     if (dias == 0) return 'hoy';
     if (dias == 1) return 'ayer';
     return 'hace $dias días';
+  }
+
+  /// Fila de una recomendación (kcal, proteína...) con su valor, para no
+  /// repetir el mismo Row cuatro veces.
+  Widget _filaRecomendacion(String etiqueta, String valor,
+      {bool destacado = false}) {
+    final tema = FlutterFlowTheme.of(context);
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 4),
+      child: Row(
+        children: [
+          Expanded(
+            child: Text(etiqueta,
+                style: tema.bodyMedium.copyWith(
+                    color: destacado ? tema.primaryText : tema.secondaryText,
+                    fontWeight: destacado ? FontWeight.w700 : FontWeight.w400)),
+          ),
+          Text(valor,
+              style: tema.bodyMedium.copyWith(
+                  color: destacado ? tema.primary : tema.primaryText,
+                  fontWeight: FontWeight.w700)),
+        ],
+      ),
+    );
+  }
+
+  Widget _tarjetaRecomendacion() {
+    final tema = FlutterFlowTheme.of(context);
+
+    if (_perfilUsuario == null) {
+      return Container(
+        margin: const EdgeInsets.only(bottom: 14),
+        padding: const EdgeInsets.all(24),
+        decoration: BoxDecoration(
+          color: tema.secondaryBackground,
+          borderRadius: BorderRadius.circular(22),
+          border: Border.all(color: tema.alternate),
+        ),
+        child: Center(child: CircularProgressIndicator(color: tema.primary)),
+      );
+    }
+
+    Widget tarjetaVacia(String mensaje) => Container(
+          margin: const EdgeInsets.only(bottom: 14),
+          padding: const EdgeInsets.all(20),
+          decoration: BoxDecoration(
+            color: tema.secondaryBackground,
+            borderRadius: BorderRadius.circular(22),
+            border: Border.all(color: tema.alternate),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(children: [
+                Icon(Icons.flag_rounded, size: 20, color: tema.tertiary),
+                const SizedBox(width: 8),
+                Text('Camino hacia tu objetivo',
+                    style: tema.titleSmall.copyWith(
+                        color: tema.primaryText, fontWeight: FontWeight.w700)),
+              ]),
+              const SizedBox(height: 10),
+              Text(mensaje,
+                  style: tema.bodySmall.copyWith(color: tema.secondaryText)),
+            ],
+          ),
+        );
+
+    final p = _perfilUsuario!;
+    final pesoActual = (p['pesoKg'] as num?)?.toDouble();
+    final objetivoPesoKg = (p['objetivoPesoKg'] as num?)?.toDouble();
+    final fechaObjTs = p['fechaObjetivoPeso'];
+    final fechaObjetivo = fechaObjTs is Timestamp ? fechaObjTs.toDate() : null;
+    final objetivoGrasaPct = (p['objetivoGrasaPct'] as num?)?.toDouble();
+    final sexo = (p['sexo'] ?? 'hombre').toString();
+    final alturaCm = (p['alturaCm'] as num?)?.toDouble();
+    final fechaNacTs = p['fechaNacimiento'];
+    final fechaNacimiento =
+        fechaNacTs is Timestamp ? fechaNacTs.toDate() : null;
+    final actividad = (p['actividad'] ?? 'moderado').toString();
+    final objetivoCualitativo = (p['objetivo'] ?? 'mantener').toString();
+
+    if (pesoActual == null ||
+        objetivoPesoKg == null ||
+        fechaObjetivo == null ||
+        alturaCm == null ||
+        fechaNacimiento == null) {
+      return tarjetaVacia(
+          'Pon tu peso objetivo y una fecha en Perfil (y, si quieres, un % de grasa objetivo) para ver aquí cuántas '
+          'calorías te harían falta para llegar a tiempo.');
+    }
+
+    final hoy = DateTime.now();
+    final diasRestantes =
+        fechaObjetivo.difference(DateTime(hoy.year, hoy.month, hoy.day)).inDays;
+    if (diasRestantes <= 0) {
+      return tarjetaVacia(
+          'La fecha objetivo ya se ha cumplido. Pon una fecha futura en Perfil para ver la recomendación.');
+    }
+
+    // Mismo cálculo que calcularObjetivos.dart (Mifflin-St Jeor), para que
+    // el "mantener" de aquí coincida con el de Perfil.
+    int edad = hoy.year - fechaNacimiento.year;
+    if (hoy.month < fechaNacimiento.month ||
+        (hoy.month == fechaNacimiento.month && hoy.day < fechaNacimiento.day)) {
+      edad--;
+    }
+    final ajusteSexo = sexo == 'mujer' ? -161.0 : 5.0;
+    final tmb = 10.0 * pesoActual + 6.25 * alturaCm - 5.0 * edad + ajusteSexo;
+    const factoresActividad = {
+      'sedentario': 1.2,
+      'ligero': 1.375,
+      'moderado': 1.55,
+      'alto': 1.725,
+      'muy_alto': 1.9,
+    };
+    final tdee = tmb * (factoresActividad[actividad] ?? 1.55);
+
+    // ~7.700 kcal equivalen a 1 kg de grasa corporal (aproximación estándar
+    // usada habitualmente en nutrición deportiva).
+    final kgDiferencia = pesoActual - objetivoPesoKg; // + = perder, - = ganar
+    final kcalTotalNecesarias = kgDiferencia * 7700;
+    final ajusteDiario = kcalTotalNecesarias / diasRestantes;
+    var kcalRecomendadas = tdee - ajusteDiario;
+
+    // Suelo de seguridad: nunca por debajo de tu metabolismo basal ni de un
+    // mínimo absoluto, aunque la fecha pedida sea muy ajustada.
+    final minimoSeguro = math.max(1200.0, tmb);
+    final seAplicoSuelo = kcalRecomendadas < minimoSeguro;
+    if (seAplicoSuelo) kcalRecomendadas = minimoSeguro;
+
+    // Proteína/grasa/carbos con el mismo criterio que Perfil.
+    final enDeficit = kcalRecomendadas < tdee - 50;
+    final proteinaG = pesoActual * (enDeficit ? 2.0 : 1.8);
+    final grasaPorPorcentaje = kcalRecomendadas * 0.25 / 9.0;
+    final grasaMinima = pesoActual * 0.8;
+    final grasaG =
+        grasaPorPorcentaje > grasaMinima ? grasaPorPorcentaje : grasaMinima;
+    final kcalRestantes = kcalRecomendadas - proteinaG * 4.0 - grasaG * 9.0;
+    final carbosG = kcalRestantes > 0 ? kcalRestantes / 4.0 : 0.0;
+
+    final mediaReal = _mediaNutricion(7);
+    final diferenciaConReal =
+        mediaReal == null ? null : mediaReal['kcal']! - kcalRecomendadas;
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: 14),
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: tema.secondaryBackground,
+        borderRadius: BorderRadius.circular(22),
+        border: Border.all(color: tema.alternate),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(children: [
+            Icon(Icons.flag_rounded, size: 20, color: tema.tertiary),
+            const SizedBox(width: 8),
+            Text('Camino hacia tu objetivo',
+                style: tema.titleSmall.copyWith(
+                    color: tema.primaryText, fontWeight: FontWeight.w700)),
+          ]),
+          const SizedBox(height: 4),
+          Text(
+            '${kgDiferencia > 0 ? 'Perder' : 'Ganar'} ${_numeroCorto(kgDiferencia.abs())} kg antes del '
+            '${fechaObjetivo.day}/${fechaObjetivo.month}/${fechaObjetivo.year}'
+            '${objetivoGrasaPct != null ? ' · objetivo ${_numeroCorto(objetivoGrasaPct)}% grasa' : ''}',
+            style: tema.bodySmall.copyWith(color: tema.secondaryText),
+          ),
+          const SizedBox(height: 14),
+          _filaRecomendacion(
+              'Calorías recomendadas', '${kcalRecomendadas.round()} kcal/día',
+              destacado: true),
+          if (seAplicoSuelo)
+            Padding(
+              padding: const EdgeInsets.only(top: 4, bottom: 4),
+              child: Text(
+                'El ritmo pedido bajaría de un mínimo seguro, así que se ha ajustado a ${minimoSeguro.round()} '
+                'kcal/día; puede que llegues algo más tarde de la fecha que pusiste.',
+                style: tema.bodySmall.copyWith(color: tema.warning),
+              ),
+            ),
+          const Divider(height: 20),
+          _filaRecomendacion('Proteína', '${proteinaG.round()} g'),
+          _filaRecomendacion('Grasa', '${grasaG.round()} g'),
+          _filaRecomendacion('Carbohidratos', '${carbosG.round()} g'),
+          if (mediaReal != null) ...[
+            const Divider(height: 20),
+            _filaRecomendacion('Tu media esta semana',
+                '${mediaReal['kcal']!.round()} kcal/día'),
+            const SizedBox(height: 8),
+            Container(
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(
+                color: _tinte(
+                    diferenciaConReal!.abs() <= 150
+                        ? tema.secondary
+                        : tema.warning,
+                    0.12),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Text(
+                diferenciaConReal.abs() <= 150
+                    ? 'Vas en línea con tu objetivo.'
+                    : diferenciaConReal > 0
+                        ? 'Comes de media ${diferenciaConReal.round()} kcal más de lo recomendado: al ritmo actual, '
+                            'llegarás más tarde de lo previsto.'
+                        : 'Comes de media ${diferenciaConReal.abs().round()} kcal menos de lo recomendado.',
+                style: tema.bodySmall.copyWith(color: tema.primaryText),
+              ),
+            ),
+          ] else ...[
+            const SizedBox(height: 8),
+            Text(
+                'Registra alguna comida para comparar esto con lo que comes de verdad.',
+                style: tema.bodySmall.copyWith(color: tema.secondaryText)),
+          ],
+          const SizedBox(height: 10),
+          Text(
+            'Estimación orientativa (Mifflin-St Jeor + ~7.700 kcal/kg de grasa), no es una pauta médica.',
+            style: tema.bodySmall.copyWith(
+                color: tema.secondaryText, fontStyle: FontStyle.italic),
+          ),
+        ],
+      ),
+    );
   }
 
   Widget _tarjetaNutricion() {
@@ -1382,7 +1725,9 @@ class _EstadisticasEntrenoState extends State<EstadisticasEntreno> {
   Widget _tarjetaPasos() {
     final tema = FlutterFlowTheme.of(context);
 
-    if (_pasosRecientes == null) {
+    // Mientras no sepamos si hay HealthKit ni tampoco el respaldo de
+    // Firestore, se espera; en cuanto uno de los dos responda, se sigue.
+    if (_mediasPasos == null && !_pasosSinPermiso && _pasosRecientes == null) {
       return Container(
         margin: const EdgeInsets.only(bottom: 14),
         padding: const EdgeInsets.all(24),
@@ -1395,14 +1740,22 @@ class _EstadisticasEntrenoState extends State<EstadisticasEntreno> {
       );
     }
 
-    final periodos = [
-      ('Esta semana', _mediaPasos(7)),
-      ('Este mes', _mediaPasos(30)),
-      ('Últimos 6 meses', _mediaPasos(182)),
-      ('Este año', _mediaPasos(365)),
-    ];
+    final usandoRespaldo = _mediasPasos == null;
+    final periodos = usandoRespaldo
+        ? [
+            ('Esta semana', _mediaPasosFirestore(7)),
+            ('Este mes', _mediaPasosFirestore(30)),
+            ('Últimos 6 meses', _mediaPasosFirestore(182)),
+            ('Este año', _mediaPasosFirestore(365)),
+          ]
+        : [
+            ('Esta semana', _mediasPasos![7]),
+            ('Este mes', _mediasPasos![30]),
+            ('Últimos 6 meses', _mediasPasos![182]),
+            ('Este año', _mediasPasos![365]),
+          ];
 
-    if (periodos.every((p) => p.$2 == null)) {
+    if (periodos.every((p) => p.$2 == null || p.$2 == 0)) {
       return Container(
         margin: const EdgeInsets.only(bottom: 14),
         padding: const EdgeInsets.all(20),
@@ -1424,8 +1777,11 @@ class _EstadisticasEntrenoState extends State<EstadisticasEntreno> {
             ]),
             const SizedBox(height: 10),
             Text(
-                'Todavía no hay pasos guardados. Se registran solos al abrir Home.',
-                style: tema.bodySmall.copyWith(color: tema.secondaryText)),
+              _pasosSinPermiso
+                  ? 'Sin acceso a Salud. Actívalo en Ajustes → Privacidad → Salud para ver tu historial de pasos aquí.'
+                  : 'Todavía no hay pasos guardados. Se registran solos al abrir Home.',
+              style: tema.bodySmall.copyWith(color: tema.secondaryText),
+            ),
           ],
         ),
       );
@@ -1450,6 +1806,12 @@ class _EstadisticasEntrenoState extends State<EstadisticasEntreno> {
                 style: tema.titleSmall.copyWith(
                     color: tema.primaryText, fontWeight: FontWeight.w700)),
           ]),
+          if (usandoRespaldo) ...[
+            const SizedBox(height: 4),
+            Text(
+                'Sin acceso a Salud: puede estar incompleto (solo lo guardado al abrir Home).',
+                style: tema.bodySmall.copyWith(color: tema.warning)),
+          ],
           const SizedBox(height: 14),
           for (final periodo in periodos)
             Padding(
@@ -1462,11 +1824,11 @@ class _EstadisticasEntrenoState extends State<EstadisticasEntreno> {
                             tema.bodyMedium.copyWith(color: tema.primaryText)),
                   ),
                   Text(
-                    periodo.$2 == null
+                    (periodo.$2 == null || periodo.$2 == 0)
                         ? 'sin datos'
                         : '${_miles(periodo.$2!.round())} pasos',
                     style: tema.bodyMedium.copyWith(
-                      color: periodo.$2 == null
+                      color: (periodo.$2 == null || periodo.$2 == 0)
                           ? tema.secondaryText
                           : tema.secondary,
                       fontWeight: FontWeight.w700,
@@ -1607,6 +1969,7 @@ class _EstadisticasEntrenoState extends State<EstadisticasEntreno> {
                             crossAxisAlignment: CrossAxisAlignment.stretch,
                             children: [
                               _seccionPesoYGrasa(docs),
+                              _tarjetaRecomendacion(),
                               _tarjetaCuerpoSemana(),
                               _tarjetaNutricion(),
                               _tarjetaPasos(),

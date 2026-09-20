@@ -73,6 +73,9 @@ class _PerfilUsuarioState extends State<PerfilUsuario> {
   final TextEditingController _diasEntrenoController = TextEditingController();
   final TextEditingController _objetivoPasosController =
       TextEditingController();
+  final TextEditingController _objetivoPesoController = TextEditingController();
+  final TextEditingController _objetivoGrasaController =
+      TextEditingController();
 
   String? _sexo;
   DateTime? _fechaNacimiento;
@@ -102,6 +105,8 @@ class _PerfilUsuarioState extends State<PerfilUsuario> {
     _caderaController.dispose();
     _diasEntrenoController.dispose();
     _objetivoPasosController.dispose();
+    _objetivoPesoController.dispose();
+    _objetivoGrasaController.dispose();
     super.dispose();
   }
 
@@ -149,6 +154,12 @@ class _PerfilUsuarioState extends State<PerfilUsuario> {
       _diasEntrenoController.text = dias == null ? '' : dias.toString();
       final objetivoPasos = (datos['objetivoPasos'] as num?)?.toInt() ?? 10000;
       _objetivoPasosController.text = objetivoPasos.toString();
+      final objetivoPesoKg = (datos['objetivoPesoKg'] as num?)?.toDouble();
+      _objetivoPesoController.text =
+          objetivoPesoKg == null ? '' : _formatearNumero(objetivoPesoKg);
+      final objetivoGrasaPct = (datos['objetivoGrasaPct'] as num?)?.toDouble();
+      _objetivoGrasaController.text =
+          objetivoGrasaPct == null ? '' : _formatearNumero(objetivoGrasaPct);
       final fechaObj = datos['fechaObjetivoPeso'];
       _fechaObjetivoPeso = fechaObj is Timestamp ? fechaObj.toDate() : null;
 
@@ -290,6 +301,8 @@ class _PerfilUsuarioState extends State<PerfilUsuario> {
     final pesoBarra = _leerDouble(_pesoBarraController.text) ?? 20.0;
     final dias = _leerInt(_diasEntrenoController.text);
     final objetivoPasos = _leerInt(_objetivoPasosController.text) ?? 10000;
+    final objetivoPesoKg = _leerDouble(_objetivoPesoController.text);
+    final objetivoGrasaPct = _leerDouble(_objetivoGrasaController.text);
     final cuello = _leerDouble(_cuelloController.text);
     final cintura = _leerDouble(_cinturaController.text);
     final cadera = _leerDouble(_caderaController.text);
@@ -311,6 +324,18 @@ class _PerfilUsuarioState extends State<PerfilUsuario> {
       errores.add('los días de entreno (0–7)');
     if (objetivoPasos < 1000 || objetivoPasos > 50000)
       errores.add('el objetivo de pasos (1.000–50.000)');
+    if (_objetivoPesoController.text.trim().isNotEmpty &&
+        (objetivoPesoKg == null ||
+            objetivoPesoKg < 30 ||
+            objetivoPesoKg > 250)) {
+      errores.add('el peso objetivo (30–250 kg)');
+    }
+    if (_objetivoGrasaController.text.trim().isNotEmpty &&
+        (objetivoGrasaPct == null ||
+            objetivoGrasaPct < 3 ||
+            objetivoGrasaPct > 60)) {
+      errores.add('el % de grasa objetivo (3–60 %)');
+    }
     if (_cuelloController.text.trim().isNotEmpty &&
         (cuello == null || cuello < 20 || cuello > 60)) {
       errores.add('el contorno de cuello (20–60 cm)');
@@ -340,6 +365,8 @@ class _PerfilUsuarioState extends State<PerfilUsuario> {
         _fechaNacimiento!,
         _actividad!,
         _objetivo!,
+        objetivoPesoKg,
+        _fechaObjetivoPeso,
       );
 
       await userRef.set({
@@ -354,6 +381,8 @@ class _PerfilUsuarioState extends State<PerfilUsuario> {
         'pesoBarraKg': pesoBarra,
         'diasEntrenoSemana': dias,
         'objetivoPasos': objetivoPasos,
+        'objetivoPesoKg': objetivoPesoKg,
+        'objetivoGrasaPct': objetivoGrasaPct,
         'fechaObjetivoPeso': _fechaObjetivoPeso,
         'cuelloCm': cuello,
         'cinturaCm': cintura,
@@ -845,6 +874,16 @@ class _PerfilUsuarioState extends State<PerfilUsuario> {
                 _etiqueta('Objetivo de pasos diarios'),
                 _campoTexto(_objetivoPasosController, 'Por ejemplo, 10000',
                     teclado: TextInputType.number, sufijo: 'pasos'),
+                _etiqueta('Peso objetivo (opcional)'),
+                _campoTexto(_objetivoPesoController, 'Por ejemplo, 78',
+                    teclado:
+                        const TextInputType.numberWithOptions(decimal: true),
+                    sufijo: 'kg'),
+                _etiqueta('% de grasa objetivo (opcional)'),
+                _campoTexto(_objetivoGrasaController, 'Por ejemplo, 15',
+                    teclado:
+                        const TextInputType.numberWithOptions(decimal: true),
+                    sufijo: '%'),
                 _etiqueta('Fecha objetivo del peso (opcional)'),
                 Row(
                   children: [
