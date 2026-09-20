@@ -791,19 +791,23 @@ class _MusculosEntrenamientoState extends State<MusculosEntrenamiento> {
     });
   }
 
-  /// Degradado de calor con 5 paradas: verde (apenas trabajado) → amarillo
-  /// → naranja → rojo → granate (trabajado a fondo para ese músculo).
+  /// Degradado de calor con 4 paradas: verde (apenas trabajado) → amarillo
+  /// → rojo → granate (trabajado a fondo para ese músculo).
   /// Escala fija por músculo, no relativa a cada entreno (ver _seriesAFondo).
   static const List<Color> _paradasCalor = [
     Color(0xFF22C55E), // verde
-    Color(0xFFEAB308), // amarillo
-    Color(0xFFF97316), // naranja
-    Color(0xFFDC2626), // rojo
-    Color(0xFF550000), // granate — mucho volumen directo en este músculo
+    Color(0xFFFFE000), // amarillo (más vivo que el mostaza original, que se
+    // leía como marrón sobre fondo oscuro)
+    Color(0xFFFF0000), // rojo
+    Color(0xFF7A0000), // granate — mucho volumen directo en este músculo
   ];
 
   Color _colorCalor(double intensidad) {
-    final t = math.sqrt(intensidad.clamp(0.0, 1.0));
+    // Antes usaba sqrt (potencia 0.5), que saltaba del verde al rojo
+    // casi de golpe: con solo un 25% de intensidad ya caía casi en rojo
+    // puro, y el amarillo apenas se veía nunca. Con 0.65 el reparto es
+    // más gradual entre los cuatro tonos.
+    final t = math.pow(intensidad.clamp(0.0, 1.0), 0.65).toDouble();
     final escalado = t * (_paradasCalor.length - 1);
     final indice = escalado.floor().clamp(0, _paradasCalor.length - 2);
     final fraccion = escalado - indice;
@@ -834,11 +838,13 @@ class _MusculosEntrenamientoState extends State<MusculosEntrenamiento> {
           relleno = _colorReposo;
         } else {
           relleno = _hex(_colorCalor(intensidad));
-          // Antes el suelo era 0.55: hasta una intensidad casi nula (un
-          // músculo que solo aparece como secundario en un ejercicio, por
-          // ejemplo) se pintaba ya a más de la mitad de opacidad, y se veía
-          // igual de "trabajado" que uno que de verdad protagoniza el día.
-          opacidad = (0.18 + 0.82 * intensidad).toStringAsFixed(2);
+          // Bajar demasiado el suelo de opacidad (probado en 0.18 y 0.32)
+          // hacía que los colores se mezclaran con el fondo oscuro y
+          // perdieran su tono real (un amarillo puro acababa pareciendo
+          // oliva). Con 0.5 el color se ve limpio incluso en intensidades
+          // bajas, y el rango hasta 1.0 sigue marcando la diferencia con
+          // lo que de verdad protagoniza el día.
+          opacidad = (0.5 + 0.5 * intensidad).toStringAsFixed(2);
         }
       }
       svg.write('<path d="$d" fill="$relleno" fill-opacity="$opacidad" '

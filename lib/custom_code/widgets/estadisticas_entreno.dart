@@ -893,14 +893,14 @@ class _EstadisticasEntrenoState extends State<EstadisticasEntreno> {
 
   static const List<Color> _paradasCalor = [
     Color(0xFF22C55E), // verde
-    Color(0xFFEAB308), // amarillo
-    Color(0xFFF97316), // naranja
-    Color(0xFFDC2626), // rojo
-    Color(0xFF550000), // granate
+    Color(
+        0xFFFFE000), // amarillo (más vivo, se distingue mejor sobre fondo oscuro)
+    Color(0xFFFF0000), // rojo
+    Color(0xFF7A0000), // granate
   ];
 
   Color _colorCalor(double intensidad) {
-    final t = math.sqrt(intensidad.clamp(0.0, 1.0));
+    final t = math.pow(intensidad.clamp(0.0, 1.0), 0.65).toDouble();
     final escalado = t * (_paradasCalor.length - 1);
     final indice = escalado.floor().clamp(0, _paradasCalor.length - 2);
     final fraccion = escalado - indice;
@@ -934,7 +934,7 @@ class _EstadisticasEntrenoState extends State<EstadisticasEntreno> {
           relleno = _colorReposo;
         } else {
           relleno = _hexColor(_colorCalor(intensidad));
-          opacidad = (0.18 + 0.82 * intensidad).toStringAsFixed(2);
+          opacidad = (0.5 + 0.5 * intensidad).toStringAsFixed(2);
         }
       }
       svg.write(

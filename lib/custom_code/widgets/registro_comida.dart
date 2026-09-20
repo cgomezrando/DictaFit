@@ -372,25 +372,29 @@ class _RegistroComidaState extends State<RegistroComida> {
   }
 
   Future<void> _cargarCatalogo() async {
-    try {
-      final token = await FirebaseAuth.instance.currentUser?.getIdToken();
-      if (token == null) return;
-      final resp = await http.get(
-        Uri.parse('$_baseUrlApi/v1/alimentos'),
-        headers: {'Authorization': 'Bearer $token'},
-      ).timeout(const Duration(seconds: 15));
-      if (resp.statusCode != 200) return;
-      final json = jsonDecode(utf8.decode(resp.bodyBytes));
-      final lista = (json['alimentos'] as List?) ?? [];
-      final catalogo = lista
-          .map((a) => _ItemCatalogo(
-              (a['id'] ?? '').toString(), (a['nombre'] ?? '').toString()))
-          .where((a) => a.id.isNotEmpty)
-          .toList()
-        ..sort((a, b) => a.nombre.compareTo(b.nombre));
-      if (mounted) setState(() => _catalogo = catalogo);
-    } catch (_) {
-      // Sin catálogo, el selector de alimento quedará limitado; no es bloqueante.
+    for (var intento = 0; intento < 2; intento++) {
+      try {
+        final token = await FirebaseAuth.instance.currentUser?.getIdToken();
+        if (token == null) return;
+        final resp = await http.get(
+          Uri.parse('$_baseUrlApi/v1/alimentos'),
+          headers: {'Authorization': 'Bearer $token'},
+        ).timeout(const Duration(seconds: 25));
+        if (resp.statusCode != 200) continue;
+        final json = jsonDecode(utf8.decode(resp.bodyBytes));
+        final lista = (json['alimentos'] as List?) ?? [];
+        final catalogo = lista
+            .map((a) => _ItemCatalogo(
+                (a['id'] ?? '').toString(), (a['nombre'] ?? '').toString()))
+            .where((a) => a.id.isNotEmpty)
+            .toList()
+          ..sort((a, b) => a.nombre.compareTo(b.nombre));
+        if (mounted) setState(() => _catalogo = catalogo);
+        return;
+      } catch (_) {
+        // Primer intento fallido (posible arranque en frío del backend):
+        // se reintenta una vez más antes de rendirse.
+      }
     }
   }
 
@@ -1619,16 +1623,20 @@ class _RegistroComidaState extends State<RegistroComida> {
       {bool relleno = true}) {
     final tema = FlutterFlowTheme.of(context);
     if (relleno) {
-      return ElevatedButton(
-        onPressed: onPulsar,
-        style: ElevatedButton.styleFrom(
-          backgroundColor: tema.secondary,
-          disabledBackgroundColor: _tinte(tema.secondary, 0.4),
-          foregroundColor: Colors.white,
-          shape: const StadiumBorder(),
-          padding: const EdgeInsets.symmetric(vertical: 15),
+      return SizedBox(
+        width: double.infinity,
+        child: ElevatedButton(
+          onPressed: onPulsar,
+          style: ElevatedButton.styleFrom(
+            backgroundColor: tema.secondary,
+            disabledBackgroundColor: _tinte(tema.secondary, 0.4),
+            foregroundColor: Colors.white,
+            shape: const StadiumBorder(),
+            padding: const EdgeInsets.symmetric(vertical: 15, horizontal: 20),
+          ),
+          child:
+              Text(texto, style: const TextStyle(fontWeight: FontWeight.w700)),
         ),
-        child: Text(texto, style: const TextStyle(fontWeight: FontWeight.w700)),
       );
     }
     return OutlinedButton(

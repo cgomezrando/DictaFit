@@ -282,6 +282,27 @@ class _RegistroEntrenoState extends State<RegistroEntreno> {
             .whereType<Map>()
             .map((e) => _EjercicioEdit.desdeJson(Map<String, dynamic>.from(e)))
             .toList();
+        // Recalcula contra el catálogo actual antes de mostrarlo: si este
+        // entreno se guardó con una versión anterior de la app, algún dato
+        // (por ejemplo, si un ejercicio es de barra o de mancuerna) podría
+        // haberse quedado desactualizado. Si falla (sin conexión, etc.), se
+        // sigue mostrando tal cual estaba guardado, sin bloquear la edición.
+        try {
+          final json = await _llamarBackend('/v1/entreno/calcular', {
+            'pesoCorporalKg': _pesoCorporalKg,
+            'sexo': _sexo,
+            'pesoBarraKg': _pesoBarraKg,
+            'ejercicios': _ejercicios.map((e) => e.aPeticion()).toList(),
+          });
+          final refrescados = ((json['ejercicios'] as List?) ?? [])
+              .map((e) =>
+                  _EjercicioEdit.desdeJson(Map<String, dynamic>.from(e as Map)))
+              .toList();
+          if (refrescados.length == _ejercicios.length)
+            _ejercicios = refrescados;
+        } catch (_) {
+          // Se queda con los datos guardados tal cual; no es bloqueante.
+        }
         estadoInicial = _Estado.confirmacion;
         _fechaEditada = (datosEntreno['fecha'] is Timestamp)
             ? (datosEntreno['fecha'] as Timestamp).toDate()
@@ -361,25 +382,29 @@ class _RegistroEntrenoState extends State<RegistroEntreno> {
   }
 
   Future<void> _cargarCatalogo() async {
-    try {
-      final token = await FirebaseAuth.instance.currentUser?.getIdToken();
-      if (token == null) return;
-      final resp = await http.get(
-        Uri.parse('$_baseUrlApi/v1/ejercicios'),
-        headers: {'Authorization': 'Bearer $token'},
-      ).timeout(const Duration(seconds: 15));
-      if (resp.statusCode != 200) return;
-      final json = jsonDecode(utf8.decode(resp.bodyBytes));
-      final lista = (json['ejercicios'] as List?) ?? [];
-      final catalogo = lista
-          .map((e) => _ItemCatalogo(
-              (e['id'] ?? '').toString(), (e['nombre'] ?? '').toString()))
-          .where((e) => e.id.isNotEmpty)
-          .toList()
-        ..sort((a, b) => a.nombre.compareTo(b.nombre));
-      if (mounted) setState(() => _catalogo = catalogo);
-    } catch (_) {
-      // Sin catálogo, el selector de ejercicio quedará limitado; no es bloqueante.
+    for (var intento = 0; intento < 2; intento++) {
+      try {
+        final token = await FirebaseAuth.instance.currentUser?.getIdToken();
+        if (token == null) return;
+        final resp = await http.get(
+          Uri.parse('$_baseUrlApi/v1/ejercicios'),
+          headers: {'Authorization': 'Bearer $token'},
+        ).timeout(const Duration(seconds: 25));
+        if (resp.statusCode != 200) continue;
+        final json = jsonDecode(utf8.decode(resp.bodyBytes));
+        final lista = (json['ejercicios'] as List?) ?? [];
+        final catalogo = lista
+            .map((e) => _ItemCatalogo(
+                (e['id'] ?? '').toString(), (e['nombre'] ?? '').toString()))
+            .where((e) => e.id.isNotEmpty)
+            .toList()
+          ..sort((a, b) => a.nombre.compareTo(b.nombre));
+        if (mounted) setState(() => _catalogo = catalogo);
+        return;
+      } catch (_) {
+        // Primer intento fallido (posible arranque en frío del backend):
+        // se reintenta una vez más antes de rendirse.
+      }
     }
   }
 
@@ -1076,16 +1101,20 @@ class _RegistroEntrenoState extends State<RegistroEntreno> {
       {bool relleno = true}) {
     final tema = FlutterFlowTheme.of(context);
     if (relleno) {
-      return ElevatedButton(
-        onPressed: onPulsar,
-        style: ElevatedButton.styleFrom(
-          backgroundColor: tema.primary,
-          disabledBackgroundColor: _tinte(tema.primary, 0.4),
-          foregroundColor: Colors.white,
-          shape: const StadiumBorder(),
-          padding: const EdgeInsets.symmetric(vertical: 15),
+      return SizedBox(
+        width: double.infinity,
+        child: ElevatedButton(
+          onPressed: onPulsar,
+          style: ElevatedButton.styleFrom(
+            backgroundColor: tema.primary,
+            disabledBackgroundColor: _tinte(tema.primary, 0.4),
+            foregroundColor: Colors.white,
+            shape: const StadiumBorder(),
+            padding: const EdgeInsets.symmetric(vertical: 15, horizontal: 20),
+          ),
+          child:
+              Text(texto, style: const TextStyle(fontWeight: FontWeight.w700)),
         ),
-        child: Text(texto, style: const TextStyle(fontWeight: FontWeight.w700)),
       );
     }
     return OutlinedButton(
