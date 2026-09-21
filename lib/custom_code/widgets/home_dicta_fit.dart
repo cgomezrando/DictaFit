@@ -123,6 +123,9 @@ class _HomeDictaFitState extends State<HomeDictaFit> {
     return '${negativo ? '-' : ''}$buffer';
   }
 
+  String _numeroCorto(double v) =>
+      v == v.roundToDouble() ? v.toInt().toString() : v.toStringAsFixed(1);
+
   String _saludo() {
     final hora = DateTime.now().hour;
     if (hora < 6) return 'Buenas noches';
@@ -714,11 +717,13 @@ class _HomeDictaFitState extends State<HomeDictaFit> {
                             color: tema.primaryText,
                             fontWeight: FontWeight.w600)),
                     const Spacer(),
-                    if (pasos != null)
-                      Text('${_miles(pasos)} / ${_miles(objetivo)}',
-                          style: tema.bodyMedium.copyWith(
-                              color: tema.secondary,
-                              fontWeight: FontWeight.w700)),
+                    Text(
+                      pasos != null
+                          ? '${_miles(pasos)} / ${_miles(objetivo)}'
+                          : 'Objetivo: ${_miles(objetivo)}',
+                      style: tema.bodyMedium.copyWith(
+                          color: tema.secondary, fontWeight: FontWeight.w700),
+                    ),
                   ],
                 ),
                 const SizedBox(height: 8),
@@ -756,8 +761,25 @@ class _HomeDictaFitState extends State<HomeDictaFit> {
     required double objetivoCarbos,
     required double grasa,
     required double objetivoGrasa,
+    double? objetivoPesoKg,
+    double? objetivoGrasaPct,
+    DateTime? fechaObjetivoPeso,
   }) {
     final tema = FlutterFlowTheme.of(context);
+
+    // Si hay peso objetivo y fecha puestos en Perfil, el título deja claro
+    // que estos números concretos son los que hacen falta para llegar a
+    // tiempo, no un cálculo genérico. El % de grasa es opcional dentro de
+    // esa frase, por si no lo has puesto.
+    String tituloResumen = 'Resumen diario';
+    if (objetivoPesoKg != null && fechaObjetivoPeso != null) {
+      final fechaTexto =
+          '${fechaObjetivoPeso.day}/${fechaObjetivoPeso.month}/${fechaObjetivoPeso.year}';
+      final pesoTexto = _numeroCorto(objetivoPesoKg);
+      tituloResumen = objetivoGrasaPct != null
+          ? 'Resumen diario para alcanzar tu objetivo de $pesoTexto kg y ${_numeroCorto(objetivoGrasaPct)}% el $fechaTexto'
+          : 'Resumen diario para alcanzar tu objetivo de $pesoTexto kg el $fechaTexto';
+    }
 
     return Container(
       padding: const EdgeInsets.fromLTRB(16, 16, 16, 18),
@@ -769,11 +791,13 @@ class _HomeDictaFitState extends State<HomeDictaFit> {
             children: [
               Icon(Icons.monitor_heart_outlined, size: 20, color: tema.primary),
               const SizedBox(width: 8),
-              Text(
-                'Resumen diario',
-                style: tema.titleSmall.copyWith(
-                  color: tema.primaryText,
-                  fontWeight: FontWeight.w600,
+              Expanded(
+                child: Text(
+                  tituloResumen,
+                  style: tema.titleSmall.copyWith(
+                    color: tema.primaryText,
+                    fontWeight: FontWeight.w600,
+                  ),
                 ),
               ),
             ],
@@ -1348,6 +1372,13 @@ class _HomeDictaFitState extends State<HomeDictaFit> {
           final objetivoGrasa = _numero(usuario['objetivoGrasaG']);
           final objetivoPasos =
               (usuario['objetivoPasos'] as num?)?.toInt() ?? 10000;
+          final objetivoPesoKg =
+              (usuario['objetivoPesoKg'] as num?)?.toDouble();
+          final objetivoGrasaPct =
+              (usuario['objetivoGrasaPct'] as num?)?.toDouble();
+          final fechaObjTs = usuario['fechaObjetivoPeso'];
+          final fechaObjetivoPeso =
+              fechaObjTs is Timestamp ? fechaObjTs.toDate() : null;
 
           return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
             stream: _comidasHoyStream,
@@ -1418,6 +1449,9 @@ class _HomeDictaFitState extends State<HomeDictaFit> {
                                       objetivoCarbos: objetivoCarbos,
                                       grasa: grasa,
                                       objetivoGrasa: objetivoGrasa,
+                                      objetivoPesoKg: objetivoPesoKg,
+                                      objetivoGrasaPct: objetivoGrasaPct,
+                                      fechaObjetivoPeso: fechaObjetivoPeso,
                                     ),
                                     const SizedBox(height: 14),
                                     _tarjetaPasos(objetivoPasos),

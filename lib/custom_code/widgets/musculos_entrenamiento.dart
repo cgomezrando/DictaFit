@@ -807,12 +807,15 @@ class _MusculosEntrenamientoState extends State<MusculosEntrenamiento> {
     // casi de golpe: con solo un 25% de intensidad ya caía casi en rojo
     // puro, y el amarillo apenas se veía nunca. Con 0.65 el reparto es
     // más gradual entre los cuatro tonos.
+    // Sin mezclar entre paradas: solo los 4 colores puros, cada uno en su
+    // franja, para que no haya tonos intermedios ambiguos (un verde con
+    // amarillo a medias puede leerse como "verdoso" o "anaranjado" según
+    // el ojo de cada cual).
     final t = math.pow(intensidad.clamp(0.0, 1.0), 0.65).toDouble();
-    final escalado = t * (_paradasCalor.length - 1);
-    final indice = escalado.floor().clamp(0, _paradasCalor.length - 2);
-    final fraccion = escalado - indice;
-    return Color.lerp(
-        _paradasCalor[indice], _paradasCalor[indice + 1], fraccion)!;
+    if (t < 0.25) return _paradasCalor[0];
+    if (t < 0.5) return _paradasCalor[1];
+    if (t < 0.75) return _paradasCalor[2];
+    return _paradasCalor[3];
   }
 
   String _construirSvg(Map<String, double> intensidades) {
