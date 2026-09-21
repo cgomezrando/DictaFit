@@ -996,13 +996,27 @@ class _EstadisticasEntrenoState extends State<EstadisticasEntreno> {
             style: tema.bodySmall.copyWith(color: tema.secondaryText)),
         const SizedBox(width: 8),
         Expanded(
-          child: Container(
-            height: 8,
-            decoration: BoxDecoration(
-              borderRadius: BorderRadius.circular(999),
-              gradient: LinearGradient(
-                  colors: List.generate(6, (i) => _colorCalor(i / 5))),
-            ),
+          child: Row(
+            children: List.generate(_paradasCalor.length, (i) {
+              return Expanded(
+                child: Container(
+                  height: 8,
+                  margin: EdgeInsets.only(
+                    left: i == 0 ? 0 : 1,
+                    right: i == _paradasCalor.length - 1 ? 0 : 1,
+                  ),
+                  decoration: BoxDecoration(
+                    color: _paradasCalor[i],
+                    borderRadius: BorderRadius.horizontal(
+                      left: i == 0 ? const Radius.circular(999) : Radius.zero,
+                      right: i == _paradasCalor.length - 1
+                          ? const Radius.circular(999)
+                          : Radius.zero,
+                    ),
+                  ),
+                ),
+              );
+            }),
           ),
         ),
         const SizedBox(width: 8),
