@@ -129,9 +129,25 @@ class _HistorialEntrenosState extends State<HistorialEntrenos> {
   /// Igual que en MusculosEntrenamiento: título a partir de qué grupos
   /// musculares se trabajaron como motor principal.
   String? _tituloSesion(Map<String, dynamic> datos) {
-    final pesos = <String, double>{};
     final ejercicios = datos['ejercicios'];
     if (ejercicios is! List) return null;
+
+    // Mismo caso especial que en MusculosEntrenamiento: un circuito de
+    // pesa rusa no es "día de X músculo".
+    final idsEjercicios = ejercicios
+        .whereType<Map>()
+        .map((e) => (e['ejercicioId'] ?? '').toString())
+        .where((id) => id.isNotEmpty)
+        .toList();
+    if (idsEjercicios.isNotEmpty) {
+      final conPesaRusa =
+          idsEjercicios.where((id) => id.startsWith('kettlebell_')).length;
+      if (conPesaRusa / idsEjercicios.length > 0.5) {
+        return 'Ejercicios HIIT con pesas rusas';
+      }
+    }
+
+    final pesos = <String, double>{};
     for (final ejercicio in ejercicios) {
       if (ejercicio is! Map) continue;
       final musculos = ejercicio['musculos'];

@@ -52,6 +52,12 @@ class _AlimentoEdit {
   double proteinaG;
   double carbosG;
   double grasaG;
+
+  /// Micronutrientes de la ración ya calculados (no por 100 g). Claves:
+  /// hierroMg, calcioMg, magnesioMg, potasioMg, zincMg, vitaminaDMcg,
+  /// vitaminaCMg, vitaminaB12Mcg, vitaminaKMcg — mismos nombres que
+  /// devuelve el backend, para no tener que traducir en cada sitio.
+  Map<String, double> micro;
   bool supuesto;
   String notaSupuesto;
 
@@ -59,6 +65,12 @@ class _AlimentoEdit {
   /// partir de la hora en que se dicta, y se puede corregir a mano (ver
   /// _detectarTipoComida y el selector en la pantalla de confirmación).
   String tipo;
+
+  /// Índice en _bloques del texto dictado que produjo este alimento (-1 si
+  /// se añadió a mano o por foto, sin texto dictado detrás). Sirve para
+  /// poder borrar del todo el trozo de transcripción de un bloque cuando
+  /// ya no queda ningún alimento suyo.
+  int bloqueIndice;
 
   _AlimentoEdit({
     required this.alimentoId,
@@ -72,10 +84,12 @@ class _AlimentoEdit {
     this.proteinaG = 0,
     this.carbosG = 0,
     this.grasaG = 0,
+    Map<String, double>? micro,
     this.supuesto = false,
     this.notaSupuesto = '',
     this.tipo = 'fuera_de_hora',
-  });
+    this.bloqueIndice = -1,
+  }) : micro = micro ?? {};
 
   factory _AlimentoEdit.desdeJson(Map<String, dynamic> j) {
     return _AlimentoEdit(
@@ -90,6 +104,10 @@ class _AlimentoEdit {
       proteinaG: (j['proteinaG'] as num?)?.toDouble() ?? 0,
       carbosG: (j['carbosG'] as num?)?.toDouble() ?? 0,
       grasaG: (j['grasaG'] as num?)?.toDouble() ?? 0,
+      micro: {
+        for (final clave in _clavesMicro)
+          clave: (j[clave] as num?)?.toDouble() ?? 0,
+      },
       supuesto: j['supuesto'] == true,
       notaSupuesto: (j['notaSupuesto'] ?? '').toString(),
       tipo: (j['tipo'] ?? 'fuera_de_hora').toString(),
@@ -110,6 +128,7 @@ class _AlimentoEdit {
         'proteinaG': proteinaG,
         'carbosG': carbosG,
         'grasaG': grasaG,
+        for (final clave in _clavesMicro) clave: micro[clave] ?? 0,
         'supuesto': supuesto,
         'notaSupuesto': notaSupuesto,
       };
@@ -136,6 +155,74 @@ const List<String> _tiposComida = [
   'cena',
   'fuera_de_hora'
 ];
+
+/// Los 9 micronutrientes que se muestran en la app, en el mismo orden en
+/// todas partes. Claves = como los devuelve el backend (…Mg/…Mcg).
+const List<String> _clavesMicro = [
+  'hierroMg',
+  'calcioMg',
+  'magnesioMg',
+  'potasioMg',
+  'zincMg',
+  'vitaminaDMcg',
+  'vitaminaCMg',
+  'vitaminaB12Mcg',
+  'vitaminaKMcg',
+];
+
+/// Mismos 9, pero con el nombre "por 100 g" que usa el backend para el
+/// catálogo y los productos personalizados (antes de multiplicar por la
+/// ración). En el mismo orden que _clavesMicro, índice a índice.
+const List<String> _clavesMicro100 = [
+  'hierro100',
+  'calcio100',
+  'magnesio100',
+  'potasio100',
+  'zinc100',
+  'vitaminaD100',
+  'vitaminaC100',
+  'vitaminaB12100',
+  'vitaminaK100',
+];
+const Map<String, String> _nombreMicro = {
+  'hierroMg': 'Hierro',
+  'calcioMg': 'Calcio',
+  'magnesioMg': 'Magnesio',
+  'potasioMg': 'Potasio',
+  'zincMg': 'Zinc',
+  'vitaminaDMcg': 'Vitamina D',
+  'vitaminaCMg': 'Vitamina C',
+  'vitaminaB12Mcg': 'Vitamina B12',
+  'vitaminaKMcg': 'Vitamina K',
+};
+const Map<String, String> _unidadMicro = {
+  'hierroMg': 'mg',
+  'calcioMg': 'mg',
+  'magnesioMg': 'mg',
+  'potasioMg': 'mg',
+  'zincMg': 'mg',
+  'vitaminaDMcg': 'µg',
+  'vitaminaCMg': 'mg',
+  'vitaminaB12Mcg': 'µg',
+  'vitaminaKMcg': 'µg',
+};
+
+/// Valores de referencia de nutrientes (VRN) oficiales de la UE, los
+/// mismos que aparecen en el etiquetado de alimentos en España
+/// (Reglamento (UE) 1169/2011). Sirven para el "% sobre la cantidad de
+/// referencia" del resumen diario, no son una recomendación médica
+/// individual.
+const Map<String, double> _vrnMicro = {
+  'hierroMg': 14,
+  'calcioMg': 800,
+  'magnesioMg': 375,
+  'potasioMg': 2000,
+  'zincMg': 10,
+  'vitaminaDMcg': 5,
+  'vitaminaCMg': 80,
+  'vitaminaB12Mcg': 2.5,
+  'vitaminaKMcg': 75,
+};
 const Map<String, String> _nombreTipoComida = {
   'desayuno': 'Desayuno',
   'comida': 'Comida',
@@ -221,6 +308,23 @@ class _RegistroComidaState extends State<RegistroComida> {
   bool _guardandoAhora = false;
 
   String _transcripcion = '';
+
+  /// Cada entrada es el texto de un dictado ("Dictar más") por separado.
+  /// _transcripcion se reconstruye siempre a partir de esta lista, uniendo
+  /// solo los bloques no vacíos. Un bloque se vacía (no se borra el hueco,
+  /// para no descuadrar los índices que ya tienen asignados los alimentos)
+  /// cuando se borra el último alimento que salió de él.
+  final List<String> _bloques = [];
+
+  /// Índices de _alimentos cuyo desplegable de vitaminas y minerales está
+  /// abierto ahora mismo. Colapsado por defecto para no saturar la
+  /// pantalla — se abre solo si lo tocas.
+  final Set<int> _microExpandido = {};
+
+  void _reconstruirTranscripcion() {
+    _transcripcion = _bloques.where((b) => b.isNotEmpty).join('  ·  ');
+  }
+
   List<_AlimentoEdit> _alimentos = [];
 
   /// Documento de la comida abierta (si ya existía una al entrar, o la que
@@ -237,6 +341,21 @@ class _RegistroComidaState extends State<RegistroComida> {
   /// se rellena con su fecha real, para no movérsela sin querer al guardar
   /// otro cambio.
   DateTime? _fechaEditada;
+
+  /// Qué hora usar para detectar el tipo de comida (desayuno/comida/cena)
+  /// de lo que se dicte AHORA. Si el día que estás registrando es hoy,
+  /// usa siempre la hora real del reloj — aunque este registro se abriera
+  /// esta mañana, lo que dictes ahora es de ahora, no de cuando empezaste.
+  /// Solo si la fecha es un día distinto a hoy (registro retroactivo) usa
+  /// la hora elegida a mano, porque ahí no hay una "hora real" con sentido.
+  DateTime _referenciaParaTipo() {
+    final ahora = DateTime.now();
+    if (_fechaEditada == null) return ahora;
+    final mismoDia = _fechaEditada!.year == ahora.year &&
+        _fechaEditada!.month == ahora.month &&
+        _fechaEditada!.day == ahora.day;
+    return mismoDia ? ahora : _fechaEditada!;
+  }
 
   String _serializarEstado() => jsonEncode({
         't': _transcripcion,
@@ -289,6 +408,11 @@ class _RegistroComidaState extends State<RegistroComida> {
         final datosComida = comidaDoc.data() as Map<String, dynamic>? ?? {};
         _comidaAbiertaRef = widget.comidaParaEditar;
         _transcripcion = (datosComida['transcripcion'] ?? '').toString();
+        // Lo ya guardado se trata como un único bloque: no sabemos qué
+        // trozo de texto produjo cada alimento de sesiones anteriores.
+        _bloques
+          ..clear()
+          ..add(_transcripcion);
         _alimentos = ((datosComida['alimentos'] as List?) ?? [])
             .whereType<Map>()
             .map((a) => _AlimentoEdit.desdeJson(Map<String, dynamic>.from(a)))
@@ -314,6 +438,11 @@ class _RegistroComidaState extends State<RegistroComida> {
           _comidaAbiertaRef = comidaDoc.reference;
           final datosComida = comidaDoc.data();
           _transcripcion = (datosComida['transcripcion'] ?? '').toString();
+          // Lo ya guardado se trata como un único bloque: no sabemos qué
+          // trozo de texto produjo cada alimento de sesiones anteriores.
+          _bloques
+            ..clear()
+            ..add(_transcripcion);
           _alimentos = ((datosComida['alimentos'] as List?) ?? [])
               .whereType<Map>()
               .map((a) => _AlimentoEdit.desdeJson(Map<String, dynamic>.from(a)))
@@ -372,7 +501,7 @@ class _RegistroComidaState extends State<RegistroComida> {
   }
 
   Future<void> _cargarCatalogo() async {
-    for (var intento = 0; intento < 2; intento++) {
+    for (var intento = 0; intento < 3; intento++) {
       try {
         final token = await FirebaseAuth.instance.currentUser?.getIdToken();
         if (token == null) return;
@@ -380,7 +509,10 @@ class _RegistroComidaState extends State<RegistroComida> {
           Uri.parse('$_baseUrlApi/v1/alimentos'),
           headers: {'Authorization': 'Bearer $token'},
         ).timeout(const Duration(seconds: 25));
-        if (resp.statusCode != 200) continue;
+        if (resp.statusCode != 200) {
+          await Future.delayed(const Duration(seconds: 2));
+          continue;
+        }
         final json = jsonDecode(utf8.decode(resp.bodyBytes));
         final lista = (json['alimentos'] as List?) ?? [];
         final catalogo = lista
@@ -392,8 +524,9 @@ class _RegistroComidaState extends State<RegistroComida> {
         if (mounted) setState(() => _catalogo = catalogo);
         return;
       } catch (_) {
-        // Primer intento fallido (posible arranque en frío del backend):
-        // se reintenta una vez más antes de rendirse.
+        // Posible arranque en frío del backend: espera un poco y reintenta
+        // antes de rendirse (hasta 3 intentos en total).
+        await Future.delayed(const Duration(seconds: 2));
       }
     }
   }
@@ -423,6 +556,7 @@ class _RegistroComidaState extends State<RegistroComida> {
             'proteina100': p['proteina100'] ?? 0,
             'carbos100': p['carbos100'] ?? 0,
             'grasa100': p['grasa100'] ?? 0,
+            for (final clave in _clavesMicro100) clave: p[clave] ?? 0,
           })
       .toList();
 
@@ -661,6 +795,12 @@ class _RegistroComidaState extends State<RegistroComida> {
         text: _numeroCorto((datos['grasa100'] as num?)?.toDouble() ?? 0));
     final confiable = datos['confiable'] != false;
     final aviso = (datos['aviso'] ?? '').toString();
+    final microDeEtiqueta = datos['micronutrientesDeEtiqueta'] == true;
+    final microDatos = {
+      for (var i = 0; i < _clavesMicro100.length; i++)
+        _clavesMicro100[i]:
+            (datos[_clavesMicro100[i]] as num?)?.toDouble() ?? 0,
+    };
 
     final guardar = await showModalBottomSheet<bool>(
       context: context,
@@ -704,6 +844,25 @@ class _RegistroComidaState extends State<RegistroComida> {
                             aviso.isEmpty
                                 ? 'La foto no se veía del todo bien; revisa los números.'
                                 : aviso,
+                            style: tema.bodySmall
+                                .copyWith(color: tema.primaryText))),
+                  ]),
+                ),
+              ],
+              if (!microDeEtiqueta) ...[
+                const SizedBox(height: 10),
+                Container(
+                  padding: const EdgeInsets.all(10),
+                  decoration: BoxDecoration(
+                      color: _tinte(tema.secondary, 0.12),
+                      borderRadius: BorderRadius.circular(12)),
+                  child: Row(children: [
+                    Icon(Icons.auto_awesome_rounded,
+                        size: 16, color: tema.secondary),
+                    const SizedBox(width: 8),
+                    Expanded(
+                        child: Text(
+                            'La etiqueta no traía vitaminas ni minerales; esos valores son una estimación, no un dato leído.',
                             style: tema.bodySmall
                                 .copyWith(color: tema.primaryText))),
                   ]),
@@ -796,6 +955,7 @@ class _RegistroComidaState extends State<RegistroComida> {
           'proteina100': proteina100,
           'carbos100': carbos100,
           'grasa100': grasa100,
+          ...microDatos,
           'fechaCreado': FieldValue.serverTimestamp(),
         });
         nuevoId = ref.id;
@@ -807,6 +967,7 @@ class _RegistroComidaState extends State<RegistroComida> {
                 'proteina100': proteina100,
                 'carbos100': carbos100,
                 'grasa100': grasa100,
+                ...microDatos,
               }));
         }
       } catch (_) {
@@ -831,7 +992,12 @@ class _RegistroComidaState extends State<RegistroComida> {
         proteinaG: round1(proteina100 * gramos / 100),
         carbosG: round1(carbos100 * gramos / 100),
         grasaG: round1(grasa100 * gramos / 100),
-        tipo: _detectarTipoComida(_fechaEditada ?? DateTime.now()),
+        micro: {
+          for (var i = 0; i < _clavesMicro.length; i++)
+            _clavesMicro[i]:
+                round1((microDatos[_clavesMicro100[i]] ?? 0) * gramos / 100),
+        },
+        tipo: _detectarTipoComida(_referenciaParaTipo()),
       ));
     });
   }
@@ -920,6 +1086,85 @@ class _RegistroComidaState extends State<RegistroComida> {
     return json;
   }
 
+  /// Pregunta si el tipo detectado por la hora es correcto, o si el usuario
+  /// quiere cambiarlo — así se puede registrar una comida y un desayuno
+  /// aunque sean las 22:31, sin depender del reloj para decidirlo. Una
+  /// transcripción entera es siempre de un único tipo, no se reparte.
+  Future<String> _confirmarTipoComida(String sugerido) async {
+    final tema = FlutterFlowTheme.of(context);
+    var elegido = sugerido;
+
+    final confirmado = await showModalBottomSheet<String>(
+      context: context,
+      isScrollControlled: true,
+      isDismissible: false,
+      enableDrag: false,
+      backgroundColor: tema.secondaryBackground,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      builder: (ctx) {
+        return StatefulBuilder(builder: (ctx, setSheet) {
+          return SafeArea(
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(20, 20, 20, 20),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Text('¿Qué comida es esto?',
+                      style: tema.titleMedium.copyWith(
+                          color: tema.primaryText,
+                          fontWeight: FontWeight.w700)),
+                  const SizedBox(height: 6),
+                  Text(
+                    'Por la hora, esto parece ${_nombreTipoComida[sugerido] ?? sugerido}. Tócalo para cambiarlo si no es así.',
+                    style: tema.bodySmall.copyWith(color: tema.secondaryText),
+                  ),
+                  const SizedBox(height: 16),
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 8,
+                    children: _tiposComida.map((tipo) {
+                      final activo = tipo == elegido;
+                      return GestureDetector(
+                        onTap: () => setSheet(() => elegido = tipo),
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 14, vertical: 10),
+                          decoration: BoxDecoration(
+                            color: activo
+                                ? tema.secondary
+                                : tema.primaryBackground,
+                            borderRadius: BorderRadius.circular(999),
+                            border: Border.all(
+                                color:
+                                    activo ? tema.secondary : tema.alternate),
+                          ),
+                          child: Text(
+                            _nombreTipoComida[tipo] ?? tipo,
+                            style: tema.bodyMedium.copyWith(
+                              color: activo ? Colors.white : tema.primaryText,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ),
+                      );
+                    }).toList(),
+                  ),
+                  const SizedBox(height: 18),
+                  _botonPrincipal(
+                      'Continuar', () => Navigator.of(ctx).pop(elegido)),
+                ],
+              ),
+            ),
+          );
+        });
+      },
+    );
+    return confirmado ?? sugerido;
+  }
+
   Future<void> _procesar(String texto) async {
     final anadiendo = _estadoPrevioEscucha == _Estado.confirmacion;
 
@@ -940,28 +1185,39 @@ class _RegistroComidaState extends State<RegistroComida> {
           .map((a) =>
               _AlimentoEdit.desdeJson(Map<String, dynamic>.from(a as Map)))
           .toList();
-      // El backend no sabe de tipos de comida: se etiqueta aquí, con la
-      // hora actual, todo lo que viene de este mismo dictado.
-      final tipoDeEsteBloque =
-          _detectarTipoComida(_fechaEditada ?? DateTime.now());
+      // Una transcripción entera es siempre un único tipo de comida: se
+      // sugiere por la hora, pero se pregunta y se puede cambiar antes de
+      // guardar — así se puede meter desayuno y comida aunque sean las
+      // 22:31, sin que el reloj decida por ti.
+      final sugerido = _detectarTipoComida(_referenciaParaTipo());
+      if (!mounted) return;
+      final tipoConfirmado = await _confirmarTipoComida(sugerido);
       for (final a in alimentosNuevos) {
-        a.tipo = tipoDeEsteBloque;
+        a.tipo = tipoConfirmado;
       }
       final avisosNuevos =
           ((json['avisos'] as List?) ?? []).map((a) => a.toString()).toList();
       final transcripcionNueva = (json['transcripcion'] ?? texto).toString();
 
       setState(() {
+        // Cada dictado es su propio bloque: si más adelante se borran
+        // todos los alimentos que salieron de este texto en concreto, se
+        // puede quitar limpiamente sin afectar a los demás bloques.
+        if (!anadiendo) _bloques.clear();
+        _bloques.add(transcripcionNueva);
+        final indiceBloque = _bloques.length - 1;
+        for (final a in alimentosNuevos) {
+          a.bloqueIndice = indiceBloque;
+        }
         if (anadiendo) {
           // A diferencia de los ejercicios, aquí no se fusionan alimentos
           // repetidos: si dictas "manzana" dos veces en momentos distintos,
           // son casi seguro dos manzanas distintas a lo largo del día.
           _alimentos.addAll(alimentosNuevos);
-          _transcripcion = '$_transcripcion  ·  $transcripcionNueva';
         } else {
           _alimentos = alimentosNuevos;
-          _transcripcion = transcripcionNueva;
         }
+        _reconstruirTranscripcion();
         _avisos = avisosNuevos;
         _notasRestantes =
             (json['notasRestantes'] as num?)?.toInt() ?? _notasRestantes;
@@ -1020,6 +1276,8 @@ class _RegistroComidaState extends State<RegistroComida> {
         'proteinaG': recalculados.fold(0.0, (s, a) => s + a.proteinaG),
         'carbosG': recalculados.fold(0.0, (s, a) => s + a.carbosG),
         'grasaG': recalculados.fold(0.0, (s, a) => s + a.grasaG),
+        for (final clave in _clavesMicro)
+          clave: recalculados.fold(0.0, (s, a) => s + (a.micro[clave] ?? 0)),
         if (_fechaEditada != null) 'fecha': Timestamp.fromDate(_fechaEditada!),
         'ultimaActualizacion': FieldValue.serverTimestamp(),
       }, SetOptions(merge: true));
@@ -1082,6 +1340,8 @@ class _RegistroComidaState extends State<RegistroComida> {
         'proteinaG': recalculados.fold(0.0, (s, a) => s + a.proteinaG),
         'carbosG': recalculados.fold(0.0, (s, a) => s + a.carbosG),
         'grasaG': recalculados.fold(0.0, (s, a) => s + a.grasaG),
+        for (final clave in _clavesMicro)
+          clave: recalculados.fold(0.0, (s, a) => s + (a.micro[clave] ?? 0)),
         'fecha': _fechaEditada != null
             ? Timestamp.fromDate(_fechaEditada!)
             : FieldValue.serverTimestamp(),
@@ -1208,7 +1468,19 @@ class _RegistroComidaState extends State<RegistroComida> {
   // ---------- Edición de alimentos ----------
 
   void _borrarAlimento(int indice) {
-    setState(() => _alimentos.removeAt(indice));
+    setState(() {
+      final borrado = _alimentos.removeAt(indice);
+      // Si era el último alimento que quedaba de su bloque de texto, ese
+      // trozo de la transcripción ya no corresponde a nada guardado — se
+      // vacía (no se quita de la lista, para no descuadrar los índices que
+      // ya tienen asignados el resto de alimentos).
+      if (borrado.bloqueIndice >= 0 &&
+          borrado.bloqueIndice < _bloques.length &&
+          !_alimentos.any((a) => a.bloqueIndice == borrado.bloqueIndice)) {
+        _bloques[borrado.bloqueIndice] = '';
+        _reconstruirTranscripcion();
+      }
+    });
   }
 
   void _agregarAlimentoVacio() {
@@ -1216,7 +1488,7 @@ class _RegistroComidaState extends State<RegistroComida> {
         alimentoId: 'desconocido',
         nombre: 'Nuevo alimento',
         gramos: 100,
-        tipo: _detectarTipoComida(_fechaEditada ?? DateTime.now()))));
+        tipo: _detectarTipoComida(_referenciaParaTipo()))));
   }
 
   /// Edita el nombre y los macros de un producto ya guardado (foto de
@@ -1380,6 +1652,35 @@ class _RegistroComidaState extends State<RegistroComida> {
     final tema = FlutterFlowTheme.of(context);
     final controlador = TextEditingController();
     String filtro = '';
+
+    if (_catalogo.isEmpty) {
+      showDialog(
+        context: context,
+        barrierDismissible: false,
+        builder: (ctx) => Center(
+          child: Container(
+            padding: const EdgeInsets.all(20),
+            decoration: BoxDecoration(
+                color: tema.secondaryBackground,
+                borderRadius: BorderRadius.circular(18)),
+            child: Column(mainAxisSize: MainAxisSize.min, children: [
+              CircularProgressIndicator(color: tema.secondary),
+              const SizedBox(height: 14),
+              Text('Cargando catálogo...',
+                  style: TextStyle(color: tema.primaryText)),
+            ]),
+          ),
+        ),
+      );
+      await _cargarCatalogo();
+      if (!mounted) return;
+      Navigator.of(context).pop();
+      if (_catalogo.isEmpty) {
+        _mostrarMensaje(
+            'No se ha podido cargar el catálogo. Comprueba tu conexión e inténtalo de nuevo.');
+        return;
+      }
+    }
 
     final elegido = await showModalBottomSheet<_ItemCatalogo?>(
       context: context,
@@ -1953,6 +2254,60 @@ class _RegistroComidaState extends State<RegistroComida> {
               ),
             ],
           ),
+          const SizedBox(height: 6),
+          GestureDetector(
+            onTap: () => setState(() {
+              if (_microExpandido.contains(indice)) {
+                _microExpandido.remove(indice);
+              } else {
+                _microExpandido.add(indice);
+              }
+            }),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  _microExpandido.contains(indice)
+                      ? 'Ocultar vitaminas y minerales'
+                      : 'Ver vitaminas y minerales',
+                  style: tema.bodySmall.copyWith(
+                      color: tema.secondary, fontWeight: FontWeight.w600),
+                ),
+                Icon(
+                  _microExpandido.contains(indice)
+                      ? Icons.expand_less_rounded
+                      : Icons.expand_more_rounded,
+                  size: 18,
+                  color: tema.secondary,
+                ),
+              ],
+            ),
+          ),
+          if (_microExpandido.contains(indice)) ...[
+            const SizedBox(height: 8),
+            Wrap(
+              spacing: 14,
+              runSpacing: 6,
+              children: _clavesMicro.map((clave) {
+                final valor = alimento.micro[clave] ?? 0;
+                return SizedBox(
+                  width: 140,
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Text(_nombreMicro[clave] ?? clave,
+                          style: tema.bodySmall
+                              .copyWith(color: tema.secondaryText)),
+                      Text('${_numeroCorto(valor)} ${_unidadMicro[clave]}',
+                          style: tema.bodySmall.copyWith(
+                              color: tema.primaryText,
+                              fontWeight: FontWeight.w600)),
+                    ],
+                  ),
+                );
+              }).toList(),
+            ),
+          ],
         ],
       ),
     );

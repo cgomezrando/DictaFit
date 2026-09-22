@@ -42,7 +42,58 @@ class HomeDictaFit extends StatefulWidget {
   State<HomeDictaFit> createState() => _HomeDictaFitState();
 }
 
-class _HomeDictaFitState extends State<HomeDictaFit> {
+/// Mismos 9 micronutrientes, nombres y VRN que en RegistroComida, para que
+/// el resumen de Home coincida con lo que ves por alimento.
+const List<String> _clavesMicroHome = [
+  'hierroMg',
+  'calcioMg',
+  'magnesioMg',
+  'potasioMg',
+  'zincMg',
+  'vitaminaDMcg',
+  'vitaminaCMg',
+  'vitaminaB12Mcg',
+  'vitaminaKMcg',
+];
+const Map<String, String> _nombreMicroHome = {
+  'hierroMg': 'Hierro',
+  'calcioMg': 'Calcio',
+  'magnesioMg': 'Magnesio',
+  'potasioMg': 'Potasio',
+  'zincMg': 'Zinc',
+  'vitaminaDMcg': 'Vitamina D',
+  'vitaminaCMg': 'Vitamina C',
+  'vitaminaB12Mcg': 'Vitamina B12',
+  'vitaminaKMcg': 'Vitamina K',
+};
+const Map<String, String> _unidadMicroHome = {
+  'hierroMg': 'mg',
+  'calcioMg': 'mg',
+  'magnesioMg': 'mg',
+  'potasioMg': 'mg',
+  'zincMg': 'mg',
+  'vitaminaDMcg': 'µg',
+  'vitaminaCMg': 'mg',
+  'vitaminaB12Mcg': 'µg',
+  'vitaminaKMcg': 'µg',
+};
+
+/// Valores de referencia de nutrientes (VRN) oficiales de la UE
+/// (Reglamento (UE) 1169/2011) — orientativos, no una pauta médica.
+const Map<String, double> _vrnMicroHome = {
+  'hierroMg': 14,
+  'calcioMg': 800,
+  'magnesioMg': 375,
+  'potasioMg': 2000,
+  'zincMg': 10,
+  'vitaminaDMcg': 5,
+  'vitaminaCMg': 80,
+  'vitaminaB12Mcg': 2.5,
+  'vitaminaKMcg': 75,
+};
+
+class _HomeDictaFitState extends State<HomeDictaFit>
+    with WidgetsBindingObserver {
   static const Map<String, String> _nombresNivel = {
     'principiante': 'Principiante',
     'novato': 'Novato',
@@ -60,11 +111,13 @@ class _HomeDictaFitState extends State<HomeDictaFit> {
   /// sin permiso, o el dispositivo no lo admite); se muestra aparte de
   /// Firestore para que se vea al instante, sin esperar al guardado.
   int? _pasosHoy;
+  bool _microHoyExpandido = false;
   bool _sinPermisoPasos = false;
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     final uid = FirebaseAuth.instance.currentUser?.uid;
     if (uid == null) return;
     unawaited(_sincronizarPasos(uid));
@@ -93,6 +146,27 @@ class _HomeDictaFitState extends State<HomeDictaFit> {
         .collection('entrenos')
         .where('fecha', isGreaterThanOrEqualTo: inicioSemana)
         .snapshots();
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    // Vuelve a leer tus pasos cada vez que vuelves a la app desde segundo
+    // plano, no solo la primera vez que se abre Home. Es la mejor
+    // aproximación posible sin entrega en segundo plano real de HealthKit
+    // (que necesitaría background delivery + background modes de iOS, una
+    // pieza bastante más grande): así, el aviso de las 12:00/18:00 usa el
+    // dato más fresco posible de cuando de verdad tuviste la app delante,
+    // en vez de quedarse congelado en el primer vistazo del día.
+    if (state == AppLifecycleState.resumed) {
+      final uid = FirebaseAuth.instance.currentUser?.uid;
+      if (uid != null) unawaited(_sincronizarPasos(uid));
+    }
   }
 
   // ---------- Utilidades ----------
@@ -764,6 +838,7 @@ class _HomeDictaFitState extends State<HomeDictaFit> {
     double? objetivoPesoKg,
     double? objetivoGrasaPct,
     DateTime? fechaObjetivoPeso,
+    Map<String, double> microHoy = const {},
   }) {
     final tema = FlutterFlowTheme.of(context);
 
@@ -854,6 +929,67 @@ class _HomeDictaFitState extends State<HomeDictaFit> {
               ),
             ],
           ),
+          if (microHoy.values.any((v) => v > 0)) ...[
+            const SizedBox(height: 10),
+            GestureDetector(
+              onTap: () =>
+                  setState(() => _microHoyExpandido = !_microHoyExpandido),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    _microHoyExpandido
+                        ? 'Ocultar vitaminas y minerales de hoy'
+                        : 'Ver vitaminas y minerales de hoy',
+                    style: tema.bodySmall.copyWith(
+                        color: tema.primary, fontWeight: FontWeight.w600),
+                  ),
+                  Icon(
+                    _microHoyExpandido
+                        ? Icons.expand_less_rounded
+                        : Icons.expand_more_rounded,
+                    size: 18,
+                    color: tema.primary,
+                  ),
+                ],
+              ),
+            ),
+            if (_microHoyExpandido) ...[
+              const SizedBox(height: 8),
+              Text(
+                'Sobre el valor de referencia diario (VRN de la UE), orientativo, no una pauta médica.',
+                style: tema.bodySmall.copyWith(
+                    color: tema.secondaryText, fontStyle: FontStyle.italic),
+              ),
+              const SizedBox(height: 8),
+              ..._clavesMicroHome.map((clave) {
+                final valor = microHoy[clave] ?? 0;
+                final vrn = _vrnMicroHome[clave] ?? 1;
+                final porcentaje = (valor / vrn * 100).clamp(0, 999);
+                return Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 3),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: Text(_nombreMicroHome[clave] ?? clave,
+                            style: tema.bodySmall
+                                .copyWith(color: tema.primaryText)),
+                      ),
+                      Text(
+                        '${_numeroCorto(valor)} ${_unidadMicroHome[clave]}  ·  ${porcentaje.round()}%',
+                        style: tema.bodySmall.copyWith(
+                          color: porcentaje >= 100
+                              ? tema.secondary
+                              : tema.secondaryText,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ],
+                  ),
+                );
+              }),
+            ],
+          ],
         ],
       ),
     );
@@ -1387,6 +1523,7 @@ class _HomeDictaFitState extends State<HomeDictaFit> {
               double proteina = 0;
               double carbos = 0;
               double grasa = 0;
+              final microHoy = <String, double>{};
               final comidas = snapComidas.data?.docs ?? [];
               for (final doc in comidas) {
                 final datos = doc.data();
@@ -1394,6 +1531,10 @@ class _HomeDictaFitState extends State<HomeDictaFit> {
                 proteina += _numero(datos['proteinaG']);
                 carbos += _numero(datos['carbosG']);
                 grasa += _numero(datos['grasaG']);
+                for (final clave in _clavesMicroHome) {
+                  microHoy[clave] =
+                      (microHoy[clave] ?? 0) + _numero(datos[clave]);
+                }
               }
 
               return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
@@ -1452,6 +1593,7 @@ class _HomeDictaFitState extends State<HomeDictaFit> {
                                       objetivoPesoKg: objetivoPesoKg,
                                       objetivoGrasaPct: objetivoGrasaPct,
                                       fechaObjetivoPeso: fechaObjetivoPeso,
+                                      microHoy: microHoy,
                                     ),
                                     const SizedBox(height: 14),
                                     _tarjetaPasos(objetivoPasos),

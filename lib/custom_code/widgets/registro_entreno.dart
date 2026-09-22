@@ -382,7 +382,7 @@ class _RegistroEntrenoState extends State<RegistroEntreno> {
   }
 
   Future<void> _cargarCatalogo() async {
-    for (var intento = 0; intento < 2; intento++) {
+    for (var intento = 0; intento < 3; intento++) {
       try {
         final token = await FirebaseAuth.instance.currentUser?.getIdToken();
         if (token == null) return;
@@ -390,7 +390,10 @@ class _RegistroEntrenoState extends State<RegistroEntreno> {
           Uri.parse('$_baseUrlApi/v1/ejercicios'),
           headers: {'Authorization': 'Bearer $token'},
         ).timeout(const Duration(seconds: 25));
-        if (resp.statusCode != 200) continue;
+        if (resp.statusCode != 200) {
+          await Future.delayed(const Duration(seconds: 2));
+          continue;
+        }
         final json = jsonDecode(utf8.decode(resp.bodyBytes));
         final lista = (json['ejercicios'] as List?) ?? [];
         final catalogo = lista
@@ -402,8 +405,9 @@ class _RegistroEntrenoState extends State<RegistroEntreno> {
         if (mounted) setState(() => _catalogo = catalogo);
         return;
       } catch (_) {
-        // Primer intento fallido (posible arranque en frío del backend):
-        // se reintenta una vez más antes de rendirse.
+        // Posible arranque en frío del backend: espera un poco y reintenta
+        // antes de rendirse (hasta 3 intentos en total).
+        await Future.delayed(const Duration(seconds: 2));
       }
     }
   }
@@ -900,6 +904,40 @@ class _RegistroEntrenoState extends State<RegistroEntreno> {
     final tema = FlutterFlowTheme.of(context);
     final controlador = TextEditingController();
     String filtro = '';
+
+    // Si el catálogo no llegó a cargar antes (por ejemplo, el backend
+    // estaba arrancando en frío), se espera aquí a que termine de cargar
+    // antes de abrir el buscador — si se hiciera en paralelo, el buscador
+    // ya abierto no se refrescaría solo aunque el dato llegara segundos
+    // después.
+    if (_catalogo.isEmpty) {
+      showDialog(
+        context: context,
+        barrierDismissible: false,
+        builder: (ctx) => Center(
+          child: Container(
+            padding: const EdgeInsets.all(20),
+            decoration: BoxDecoration(
+                color: tema.secondaryBackground,
+                borderRadius: BorderRadius.circular(18)),
+            child: Column(mainAxisSize: MainAxisSize.min, children: [
+              CircularProgressIndicator(color: tema.primary),
+              const SizedBox(height: 14),
+              Text('Cargando catálogo...',
+                  style: TextStyle(color: tema.primaryText)),
+            ]),
+          ),
+        ),
+      );
+      await _cargarCatalogo();
+      if (!mounted) return;
+      Navigator.of(context).pop(); // cierra "Cargando catálogo..."
+      if (_catalogo.isEmpty) {
+        _mostrarMensaje(
+            'No se ha podido cargar el catálogo. Comprueba tu conexión e inténtalo de nuevo.');
+        return;
+      }
+    }
 
     final elegido = await showModalBottomSheet<_ItemCatalogo?>(
       context: context,

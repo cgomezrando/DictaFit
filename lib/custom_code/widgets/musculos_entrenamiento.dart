@@ -15,6 +15,12 @@ import 'dart:math' as math;
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter_svg/flutter_svg.dart';
+import 'dart:async';
+import 'dart:convert';
+import 'package:http/http.dart' as http;
+
+const String _baseUrlApi =
+    'https://dictafit-api-1028761004087.europe-west1.run.app';
 
 class MusculosEntrenamiento extends StatefulWidget {
   const MusculosEntrenamiento({
@@ -42,6 +48,38 @@ class _MusculosEntrenamientoState extends State<MusculosEntrenamiento> {
   /// cargado bajo demanda según qué ejercicios aparecen en el entreno.
   final Map<String, double> _marcasCache = {};
   final Set<String> _marcasEnCarga = {};
+
+  /// Músculos por ejercicio, según el catálogo ACTUAL (no lo guardado en
+  /// el entreno): si este entreno se dictó antes de un ajuste o de que se
+  /// añadiera el ejercicio al catálogo, lo guardado puede tener datos de
+  /// músculos incompletos o desactualizados. Mismo arreglo que en el
+  /// cuerpo semanal de Estadísticas.
+  Map<String, List<dynamic>> _musculosPorEjercicioCatalogo = {};
+
+  Future<void> _cargarCatalogoMusculos() async {
+    try {
+      final token = await FirebaseAuth.instance.currentUser?.getIdToken();
+      if (token == null) return;
+      final resp = await http.get(
+        Uri.parse('$_baseUrlApi/v1/ejercicios'),
+        headers: {'Authorization': 'Bearer $token'},
+      ).timeout(const Duration(seconds: 25));
+      if (resp.statusCode != 200) return;
+      final json = jsonDecode(utf8.decode(resp.bodyBytes));
+      final lista = (json['ejercicios'] as List?) ?? [];
+      final mapa = <String, List<dynamic>>{};
+      for (final e in lista) {
+        if (e is! Map) continue;
+        final id = (e['id'] ?? '').toString();
+        final musculos = e['musculos'];
+        if (id.isNotEmpty && musculos is List) mapa[id] = musculos;
+      }
+      if (mounted) setState(() => _musculosPorEjercicioCatalogo = mapa);
+    } catch (_) {
+      // Sin catálogo fresco, se sigue usando lo guardado en el entreno; no
+      // es bloqueante.
+    }
+  }
 
   /// Últimos entrenos del usuario, para la regla de "2 para 2" (ver
   /// _cumplioSesionAnterior). Se cargan una sola vez por apertura de la
@@ -102,6 +140,7 @@ class _MusculosEntrenamientoState extends State<MusculosEntrenamiento> {
   void initState() {
     super.initState();
     _crearStream();
+    unawaited(_cargarCatalogoMusculos());
   }
 
   @override
@@ -316,6 +355,13 @@ class _MusculosEntrenamientoState extends State<MusculosEntrenamiento> {
     String ejercicioId,
     DateTime? fechaEntreno,
   ) {
+    // La progresión "2 para 2" está pensada para pesos de gimnasio que
+    // subes poco a poco; en un circuito de pesa rusa repites el mismo peso
+    // y las mismas repeticiones estimadas cada vez, así que saldría casi
+    // siempre en verde sin que eso signifique nada real. Se omite del todo
+    // para estos ejercicios.
+    if (ejercicioId.startsWith('kettlebell_')) return const SizedBox.shrink();
+
     final tema = FlutterFlowTheme.of(context);
     const objetivos = [8, 12];
 
@@ -499,7 +545,17 @@ class _MusculosEntrenamientoState extends State<MusculosEntrenamiento> {
     if (ejercicios is! List) return niveles;
     for (final ejercicio in ejercicios) {
       if (ejercicio is! Map) continue;
-      final musculos = ejercicio['musculos'];
+      final ejercicioId = (ejercicio['ejercicioId'] ?? '').toString();
+      final musculosGuardados = ejercicio['musculos'];
+      // Prioridad invertida a propósito: lo guardado es la fuente de
+      // verdad (ya confirmado correcto con datos reales), y el catálogo
+      // solo entra como respaldo si lo guardado viene vacío o roto —
+      // nunca al revés, para no arriesgarse a que un catálogo desplegado
+      // desactualizado sobrescriba datos que ya estaban bien.
+      final musculos =
+          (musculosGuardados is List && musculosGuardados.isNotEmpty)
+              ? musculosGuardados
+              : _musculosPorEjercicioCatalogo[ejercicioId];
       if (musculos is! List) continue;
       for (final m in musculos) {
         if (m is! Map) continue;
@@ -587,9 +643,26 @@ class _MusculosEntrenamientoState extends State<MusculosEntrenamiento> {
   /// motor principal (no de los nombres de los ejercicios). Es orientativo:
   /// una sesión repartida entre varios grupos se llama "cuerpo completo".
   String? _tituloSesion(Map<String, dynamic> entreno) {
-    final pesos = <String, double>{};
     final ejercicios = entreno['ejercicios'];
     if (ejercicios is! List) return null;
+
+    // Si la mayoría de los ejercicios son de pesa rusa (circuito tipo
+    // HIIT), el título no tiene sentido como "día de X músculo": es un
+    // circuito, no una sesión centrada en un grupo.
+    final idsEjercicios = ejercicios
+        .whereType<Map>()
+        .map((e) => (e['ejercicioId'] ?? '').toString())
+        .where((id) => id.isNotEmpty)
+        .toList();
+    if (idsEjercicios.isNotEmpty) {
+      final conPesaRusa =
+          idsEjercicios.where((id) => id.startsWith('kettlebell_')).length;
+      if (conPesaRusa / idsEjercicios.length > 0.5) {
+        return 'Ejercicios HIIT con pesas rusas';
+      }
+    }
+
+    final pesos = <String, double>{};
     for (final ejercicio in ejercicios) {
       if (ejercicio is! Map) continue;
       final musculos = ejercicio['musculos'];
@@ -730,7 +803,17 @@ class _MusculosEntrenamientoState extends State<MusculosEntrenamiento> {
     _cargarMarcasFaltantes(ejercicios);
     for (final ejercicio in ejercicios) {
       if (ejercicio is! Map) continue;
-      final musculos = ejercicio['musculos'];
+      final ejercicioId = (ejercicio['ejercicioId'] ?? '').toString();
+      final musculosGuardados = ejercicio['musculos'];
+      // Prioridad invertida a propósito: lo guardado es la fuente de
+      // verdad (ya confirmado correcto con datos reales), y el catálogo
+      // solo entra como respaldo si lo guardado viene vacío o roto —
+      // nunca al revés, para no arriesgarse a que un catálogo desplegado
+      // desactualizado sobrescriba datos que ya estaban bien.
+      final musculos =
+          (musculosGuardados is List && musculosGuardados.isNotEmpty)
+              ? musculosGuardados
+              : _musculosPorEjercicioCatalogo[ejercicioId];
       if (musculos is! List) continue;
 
       // Solo cuentan las series con peso y repeticiones; una serie sin
@@ -757,7 +840,6 @@ class _MusculosEntrenamientoState extends State<MusculosEntrenamiento> {
       //   - con marca previa: 1RM de hoy ÷ mejor 1RM histórico
       //   - primera vez que lo haces: 1.0 (hoy es tu referencia)
       //   - sin peso registrado (1RM = 0): 0.5, carga desconocida
-      final ejercicioId = (ejercicio['ejercicioId'] ?? '').toString();
       final e1rm = (ejercicio['e1rmKg'] as num?)?.toDouble() ?? 0;
       final mejorHistorico = _marcasCache[ejercicioId];
       double factorCarga;

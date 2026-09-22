@@ -15,8 +15,13 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:fl_chart/fl_chart.dart';
 import 'package:health/health.dart';
 import 'dart:async';
+import 'dart:convert';
+import 'package:http/http.dart' as http;
 import 'package:flutter_svg/flutter_svg.dart';
 import 'dart:math' as math;
+
+const String _baseUrlApi =
+    'https://dictafit-api-1028761004087.europe-west1.run.app';
 
 /// Si el compilador se queja de que no encuentra 'package:fl_chart/fl_chart.dart',
 /// añádelo en Custom Pub Dependencies: fl_chart: ^0.69.0
@@ -120,6 +125,7 @@ class _EstadisticasEntrenoState extends State<EstadisticasEntreno> {
       _cargarComidasRecientes(uid);
       unawaited(_cargarPasosDesdeHealthKit());
       _cargarPerfil(uid);
+      unawaited(_cargarCatalogoMusculos());
     }
   }
 
@@ -183,6 +189,37 @@ class _EstadisticasEntrenoState extends State<EstadisticasEntreno> {
   }
 
   Map<String, dynamic>? _perfilUsuario;
+
+  /// Músculos por ejercicio, según el catálogo ACTUAL del backend (no lo
+  /// guardado en cada entreno). Un entreno pudo dictarse antes de que
+  /// añadiéramos o ajustáramos un ejercicio; sin esto, el cuerpo semanal se
+  /// quedaría con datos de músculos desactualizados, silenciosamente.
+  Map<String, List<dynamic>> _musculosPorEjercicioCatalogo = {};
+
+  Future<void> _cargarCatalogoMusculos() async {
+    try {
+      final token = await FirebaseAuth.instance.currentUser?.getIdToken();
+      if (token == null) return;
+      final resp = await http.get(
+        Uri.parse('$_baseUrlApi/v1/ejercicios'),
+        headers: {'Authorization': 'Bearer $token'},
+      ).timeout(const Duration(seconds: 25));
+      if (resp.statusCode != 200) return;
+      final json = jsonDecode(utf8.decode(resp.bodyBytes));
+      final lista = (json['ejercicios'] as List?) ?? [];
+      final mapa = <String, List<dynamic>>{};
+      for (final e in lista) {
+        if (e is! Map) continue;
+        final id = (e['id'] ?? '').toString();
+        final musculos = e['musculos'];
+        if (id.isNotEmpty && musculos is List) mapa[id] = musculos;
+      }
+      if (mounted) setState(() => _musculosPorEjercicioCatalogo = mapa);
+    } catch (_) {
+      // Sin catálogo fresco, se sigue usando lo guardado en cada entreno;
+      // no es bloqueante.
+    }
+  }
 
   void _cargarPerfil(String uid) {
     FirebaseFirestore.instance.collection('users').doc(uid).get().then((doc) {
@@ -368,7 +405,18 @@ class _EstadisticasEntrenoState extends State<EstadisticasEntreno> {
       if (ejercicios is! List) continue;
       for (final ejercicio in ejercicios) {
         if (ejercicio is! Map) continue;
-        final musculos = ejercicio['musculos'];
+        final ejercicioId = (ejercicio['ejercicioId'] ?? '').toString();
+        // Prefiere el catálogo actual sobre lo guardado en el entreno: si
+        // el ejercicio se dictó antes de que se ajustara o se añadiera al
+        // catálogo, lo guardado puede tener músculos incompletos o
+        // desactualizados.
+        final musculosGuardados = ejercicio['musculos'];
+        // Misma prioridad invertida que en MusculosEntrenamiento: lo
+        // guardado manda, el catálogo solo es respaldo si viene vacío.
+        final musculos =
+            (musculosGuardados is List && musculosGuardados.isNotEmpty)
+                ? musculosGuardados
+                : _musculosPorEjercicioCatalogo[ejercicioId];
         if (musculos is! List) continue;
 
         final series = ejercicio['series'];
@@ -387,7 +435,6 @@ class _EstadisticasEntrenoState extends State<EstadisticasEntreno> {
         }
         if (numSeries == 0) continue;
 
-        final ejercicioId = (ejercicio['ejercicioId'] ?? '').toString();
         final e1rm = (ejercicio['e1rmKg'] as num?)?.toDouble() ?? 0;
         final mejorHistorico = _marcasCache[ejercicioId];
         double factorCarga;
