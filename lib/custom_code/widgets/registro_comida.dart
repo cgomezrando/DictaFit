@@ -66,11 +66,13 @@ class _AlimentoEdit {
   /// _detectarTipoComida y el selector en la pantalla de confirmación).
   String tipo;
 
-  /// Índice en _bloques del texto dictado que produjo este alimento (-1 si
-  /// se añadió a mano o por foto, sin texto dictado detrás). Sirve para
-  /// poder borrar del todo el trozo de transcripción de un bloque cuando
-  /// ya no queda ningún alimento suyo.
-  int bloqueIndice;
+  /// El trozo exacto del texto dictado que describe SOLO este alimento
+  /// (vacío si se añadió a mano o por foto, sin dictado detrás). La
+  /// transcripción que se muestra se reconstruye siempre a partir de
+  /// estos fragmentos, alimento a alimento — así, si borras uno, se va
+  /// justo su parte del texto, sin arrastrar el resto de la frase ni
+  /// dejar restos de algo que ya no está.
+  String fragmentoDictado;
 
   _AlimentoEdit({
     required this.alimentoId,
@@ -88,7 +90,7 @@ class _AlimentoEdit {
     this.supuesto = false,
     this.notaSupuesto = '',
     this.tipo = 'fuera_de_hora',
-    this.bloqueIndice = -1,
+    this.fragmentoDictado = '',
   }) : micro = micro ?? {};
 
   factory _AlimentoEdit.desdeJson(Map<String, dynamic> j) {
@@ -108,6 +110,7 @@ class _AlimentoEdit {
         for (final clave in _clavesMicro)
           clave: (j[clave] as num?)?.toDouble() ?? 0,
       },
+      fragmentoDictado: (j['fragmentoDictado'] ?? '').toString(),
       supuesto: j['supuesto'] == true,
       notaSupuesto: (j['notaSupuesto'] ?? '').toString(),
       tipo: (j['tipo'] ?? 'fuera_de_hora').toString(),
@@ -129,6 +132,7 @@ class _AlimentoEdit {
         'carbosG': carbosG,
         'grasaG': grasaG,
         for (final clave in _clavesMicro) clave: micro[clave] ?? 0,
+        'fragmentoDictado': fragmentoDictado,
         'supuesto': supuesto,
         'notaSupuesto': notaSupuesto,
       };
@@ -309,20 +313,26 @@ class _RegistroComidaState extends State<RegistroComida> {
 
   String _transcripcion = '';
 
-  /// Cada entrada es el texto de un dictado ("Dictar más") por separado.
-  /// _transcripcion se reconstruye siempre a partir de esta lista, uniendo
-  /// solo los bloques no vacíos. Un bloque se vacía (no se borra el hueco,
-  /// para no descuadrar los índices que ya tienen asignados los alimentos)
-  /// cuando se borra el último alimento que salió de él.
-  final List<String> _bloques = [];
-
   /// Índices de _alimentos cuyo desplegable de vitaminas y minerales está
   /// abierto ahora mismo. Colapsado por defecto para no saturar la
   /// pantalla — se abre solo si lo tocas.
   final Set<int> _microExpandido = {};
 
+  /// Tipo de comida elegido en _elegirGrupoDestino() para el próximo
+  /// dictado/alimento manual/foto — se pregunta ANTES de la acción, no
+  /// después, y se usa en vez de la detección automática por hora.
+  String? _tipoElegidoParaProximo;
+
+  /// La transcripción que se muestra es siempre la suma de los fragmentos
+  /// de los alimentos que quedan en la lista — no un texto guardado aparte.
+  /// Así, borrar un alimento (aunque compartiera frase con otros, como
+  /// "salmón con patata asada") quita justo su trozo, sin dejar restos de
+  /// algo que ya no está ni arrastrar el resto de la frase.
   void _reconstruirTranscripcion() {
-    _transcripcion = _bloques.where((b) => b.isNotEmpty).join('  ·  ');
+    _transcripcion = _alimentos
+        .map((a) => a.fragmentoDictado.trim())
+        .where((f) => f.isNotEmpty)
+        .join('  ·  ');
   }
 
   List<_AlimentoEdit> _alimentos = [];
@@ -407,16 +417,16 @@ class _RegistroComidaState extends State<RegistroComida> {
         final comidaDoc = await widget.comidaParaEditar!.get();
         final datosComida = comidaDoc.data() as Map<String, dynamic>? ?? {};
         _comidaAbiertaRef = widget.comidaParaEditar;
-        _transcripcion = (datosComida['transcripcion'] ?? '').toString();
-        // Lo ya guardado se trata como un único bloque: no sabemos qué
-        // trozo de texto produjo cada alimento de sesiones anteriores.
-        _bloques
-          ..clear()
-          ..add(_transcripcion);
         _alimentos = ((datosComida['alimentos'] as List?) ?? [])
             .whereType<Map>()
             .map((a) => _AlimentoEdit.desdeJson(Map<String, dynamic>.from(a)))
             .toList();
+        // La transcripción se reconstruye desde los fragmentos de cada
+        // alimento ya cargado (vacío para los guardados antes de este
+        // cambio, que no tenían fragmento propio — no hay forma de
+        // recuperarlo retroactivamente, pero tampoco arrastran texto
+        // huérfano de algo que ya has borrado).
+        _reconstruirTranscripcion();
         estadoInicial = _Estado.confirmacion;
         _fechaEditada = (datosComida['fecha'] is Timestamp)
             ? (datosComida['fecha'] as Timestamp).toDate()
@@ -437,16 +447,11 @@ class _RegistroComidaState extends State<RegistroComida> {
           final comidaDoc = abiertas.docs.first;
           _comidaAbiertaRef = comidaDoc.reference;
           final datosComida = comidaDoc.data();
-          _transcripcion = (datosComida['transcripcion'] ?? '').toString();
-          // Lo ya guardado se trata como un único bloque: no sabemos qué
-          // trozo de texto produjo cada alimento de sesiones anteriores.
-          _bloques
-            ..clear()
-            ..add(_transcripcion);
           _alimentos = ((datosComida['alimentos'] as List?) ?? [])
               .whereType<Map>()
               .map((a) => _AlimentoEdit.desdeJson(Map<String, dynamic>.from(a)))
               .toList();
+          _reconstruirTranscripcion();
           estadoInicial = _Estado.confirmacion;
           _fechaEditada = (datosComida['fecha'] is Timestamp)
               ? (datosComida['fecha'] as Timestamp).toDate()
@@ -569,6 +574,19 @@ class _RegistroComidaState extends State<RegistroComida> {
 
   // ---------- Dictado ----------
 
+  /// Pregunta a qué comida va esto antes de empezar a dictar (voz o texto),
+  /// y solo entonces abre el micrófono o el cuadro de texto.
+  Future<void> _iniciarDictado() async {
+    final tipo = await _elegirGrupoDestino();
+    if (tipo == null || !mounted) return;
+    _tipoElegidoParaProximo = tipo;
+    if (_vozDisponible) {
+      _empezarEscucha();
+    } else {
+      await _dictarMasTexto();
+    }
+  }
+
   void _empezarEscucha() {
     _estadoPrevioEscucha = _estado; // inicio o confirmacion (al dictar más)
     setState(() {
@@ -690,6 +708,9 @@ class _RegistroComidaState extends State<RegistroComida> {
   /// backend para leerla, y muestra el resultado en un formulario editable
   /// antes de guardarlo como producto propio y añadirlo a esta comida.
   Future<void> _fotoDeProducto() async {
+    final tipo = await _elegirGrupoDestino();
+    if (tipo == null || !mounted) return;
+    _tipoElegidoParaProximo = tipo;
     final tema = FlutterFlowTheme.of(context);
     final origen = await showModalBottomSheet<ImageSource>(
       context: context,
@@ -997,7 +1018,8 @@ class _RegistroComidaState extends State<RegistroComida> {
             _clavesMicro[i]:
                 round1((microDatos[_clavesMicro100[i]] ?? 0) * gramos / 100),
         },
-        tipo: _detectarTipoComida(_referenciaParaTipo()),
+        tipo: _tipoElegidoParaProximo ??
+            _detectarTipoComida(_referenciaParaTipo()),
       ));
     });
   }
@@ -1090,79 +1112,129 @@ class _RegistroComidaState extends State<RegistroComida> {
   /// quiere cambiarlo — así se puede registrar una comida y un desayuno
   /// aunque sean las 22:31, sin depender del reloj para decidirlo. Una
   /// transcripción entera es siempre de un único tipo, no se reparte.
-  Future<String> _confirmarTipoComida(String sugerido) async {
+  /// Pregunta ANTES de dictar/añadir/hacer una foto a qué comida va esto:
+  /// a una de las que ya tienes en pantalla, o a una nueva. Null si el
+  /// usuario cierra el diálogo sin elegir (en ese caso, la acción que lo
+  /// llamó no debe seguir adelante).
+  Future<String?> _elegirGrupoDestino() async {
     final tema = FlutterFlowTheme.of(context);
-    var elegido = sugerido;
 
-    final confirmado = await showModalBottomSheet<String>(
+    final tiposPresentes = <String>[];
+    for (final tipo in _tiposComida) {
+      if (_alimentos.any((a) => a.tipo == tipo)) tiposPresentes.add(tipo);
+    }
+    final tiposNuevos =
+        _tiposComida.where((t) => !tiposPresentes.contains(t)).toList();
+    final sugeridoParaNueva = _detectarTipoComida(_referenciaParaTipo());
+
+    // Si no hay ninguna comida empezada todavía, no tiene sentido la
+    // distinción "ya empezada / nueva": se va directo a elegir el tipo.
+    if (tiposPresentes.isEmpty) {
+      return _elegirTipoSimple(sugeridoParaNueva,
+          titulo: '¿Qué comida es esto?');
+    }
+
+    return showModalBottomSheet<String>(
       context: context,
       isScrollControlled: true,
-      isDismissible: false,
-      enableDrag: false,
       backgroundColor: tema.secondaryBackground,
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
       ),
-      builder: (ctx) {
-        return StatefulBuilder(builder: (ctx, setSheet) {
-          return SafeArea(
-            child: Padding(
-              padding: const EdgeInsets.fromLTRB(20, 20, 20, 20),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  Text('¿Qué comida es esto?',
-                      style: tema.titleMedium.copyWith(
-                          color: tema.primaryText,
-                          fontWeight: FontWeight.w700)),
-                  const SizedBox(height: 6),
-                  Text(
-                    'Por la hora, esto parece ${_nombreTipoComida[sugerido] ?? sugerido}. Tócalo para cambiarlo si no es así.',
-                    style: tema.bodySmall.copyWith(color: tema.secondaryText),
-                  ),
-                  const SizedBox(height: 16),
-                  Wrap(
-                    spacing: 8,
-                    runSpacing: 8,
-                    children: _tiposComida.map((tipo) {
-                      final activo = tipo == elegido;
-                      return GestureDetector(
-                        onTap: () => setSheet(() => elegido = tipo),
-                        child: Container(
-                          padding: const EdgeInsets.symmetric(
-                              horizontal: 14, vertical: 10),
-                          decoration: BoxDecoration(
-                            color: activo
-                                ? tema.secondary
-                                : tema.primaryBackground,
-                            borderRadius: BorderRadius.circular(999),
-                            border: Border.all(
-                                color:
-                                    activo ? tema.secondary : tema.alternate),
-                          ),
-                          child: Text(
-                            _nombreTipoComida[tipo] ?? tipo,
-                            style: tema.bodyMedium.copyWith(
-                              color: activo ? Colors.white : tema.primaryText,
-                              fontWeight: FontWeight.w600,
-                            ),
-                          ),
-                        ),
-                      );
-                    }).toList(),
-                  ),
-                  const SizedBox(height: 18),
-                  _botonPrincipal(
-                      'Continuar', () => Navigator.of(ctx).pop(elegido)),
-                ],
-              ),
-            ),
-          );
-        });
-      },
+      builder: (ctx) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(20, 20, 20, 24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Text('¿A qué comida va esto?',
+                  style: tema.titleMedium.copyWith(
+                      color: tema.primaryText, fontWeight: FontWeight.w700)),
+              const SizedBox(height: 16),
+              Text('Añadir a una comida ya empezada',
+                  style: tema.bodySmall.copyWith(
+                      color: tema.secondaryText, fontWeight: FontWeight.w600)),
+              const SizedBox(height: 6),
+              ...tiposPresentes.map((tipo) {
+                final n = _alimentos.where((a) => a.tipo == tipo).length;
+                return ListTile(
+                  contentPadding: EdgeInsets.zero,
+                  leading: Icon(Icons.add_circle_outline_rounded,
+                      color: tema.primary),
+                  title: Text(_nombreTipoComida[tipo] ?? tipo,
+                      style: TextStyle(color: tema.primaryText)),
+                  subtitle: Text('$n alimento${n == 1 ? '' : 's'} ya metidos',
+                      style:
+                          TextStyle(color: tema.secondaryText, fontSize: 12)),
+                  onTap: () => Navigator.of(ctx).pop(tipo),
+                );
+              }),
+              if (tiposNuevos.isNotEmpty) ...[
+                const SizedBox(height: 12),
+                Text('Nueva comida',
+                    style: tema.bodySmall.copyWith(
+                        color: tema.secondaryText,
+                        fontWeight: FontWeight.w600)),
+                const SizedBox(height: 6),
+                ...tiposNuevos.map((tipo) => ListTile(
+                      contentPadding: EdgeInsets.zero,
+                      leading: Icon(Icons.restaurant_rounded,
+                          color: tema.secondaryText),
+                      title: Text(_nombreTipoComida[tipo] ?? tipo,
+                          style: TextStyle(color: tema.primaryText)),
+                      subtitle: tipo == sugeridoParaNueva
+                          ? Text('Lo que toca ahora, por la hora',
+                              style: TextStyle(
+                                  color: tema.secondaryText, fontSize: 12))
+                          : null,
+                      onTap: () => Navigator.of(ctx).pop(tipo),
+                    )),
+              ],
+            ],
+          ),
+        ),
+      ),
     );
-    return confirmado ?? sugerido;
+  }
+
+  /// Selector simple de un tipo (sin distinguir "ya empezada/nueva"), para
+  /// cuando no hay ninguna comida todavía o para re-etiquetar un grupo ya
+  /// existente desde su cabecera.
+  Future<String?> _elegirTipoSimple(String actual,
+      {String titulo = '¿Qué comida es esto?'}) async {
+    final tema = FlutterFlowTheme.of(context);
+    return showModalBottomSheet<String>(
+      context: context,
+      backgroundColor: tema.secondaryBackground,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      builder: (ctx) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.symmetric(vertical: 8),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(20, 8, 20, 8),
+                child: Text(titulo,
+                    style: tema.titleMedium.copyWith(
+                        color: tema.primaryText, fontWeight: FontWeight.w700)),
+              ),
+              ..._tiposComida.map((t) => ListTile(
+                    title: Text(_nombreTipoComida[t]!,
+                        style: TextStyle(color: tema.primaryText)),
+                    trailing: t == actual
+                        ? Icon(Icons.check_rounded, color: tema.primary)
+                        : null,
+                    onTap: () => Navigator.of(ctx).pop(t),
+                  )),
+            ],
+          ),
+        ),
+      ),
+    );
   }
 
   Future<void> _procesar(String texto) async {
@@ -1185,30 +1257,21 @@ class _RegistroComidaState extends State<RegistroComida> {
           .map((a) =>
               _AlimentoEdit.desdeJson(Map<String, dynamic>.from(a as Map)))
           .toList();
-      // Una transcripción entera es siempre un único tipo de comida: se
-      // sugiere por la hora, pero se pregunta y se puede cambiar antes de
-      // guardar — así se puede meter desayuno y comida aunque sean las
-      // 22:31, sin que el reloj decida por ti.
-      final sugerido = _detectarTipoComida(_referenciaParaTipo());
-      if (!mounted) return;
-      final tipoConfirmado = await _confirmarTipoComida(sugerido);
+      // El tipo ya se eligió ANTES de dictar (_elegirGrupoDestino, llamado
+      // desde _iniciarDictado) — una transcripción entera es siempre de un
+      // único tipo, el que se eligió al principio.
+      final tipoConfirmado =
+          _tipoElegidoParaProximo ?? _detectarTipoComida(_referenciaParaTipo());
       for (final a in alimentosNuevos) {
         a.tipo = tipoConfirmado;
       }
       final avisosNuevos =
           ((json['avisos'] as List?) ?? []).map((a) => a.toString()).toList();
-      final transcripcionNueva = (json['transcripcion'] ?? texto).toString();
 
       setState(() {
-        // Cada dictado es su propio bloque: si más adelante se borran
-        // todos los alimentos que salieron de este texto en concreto, se
-        // puede quitar limpiamente sin afectar a los demás bloques.
-        if (!anadiendo) _bloques.clear();
-        _bloques.add(transcripcionNueva);
-        final indiceBloque = _bloques.length - 1;
-        for (final a in alimentosNuevos) {
-          a.bloqueIndice = indiceBloque;
-        }
+        // Cada alimento ya trae su propio fragmento de texto (fragmentoDictado,
+        // devuelto por el backend) — no hace falta llevar la cuenta de bloques
+        // por separado; la transcripción se reconstruye sola a partir de ellos.
         if (anadiendo) {
           // A diferencia de los ejercicios, aquí no se fusionan alimentos
           // repetidos: si dictas "manzana" dos veces en momentos distintos,
@@ -1467,33 +1530,222 @@ class _RegistroComidaState extends State<RegistroComida> {
 
   // ---------- Edición de alimentos ----------
 
-  void _borrarAlimento(int indice) {
+  /// true si este alimento no viene de un ejercicio de catálogo real
+  /// (BEDCA) — es "desconocido" o uno de tus productos guardados por foto
+  /// o a mano. Para estos, tocar el lápiz edita nombre y macros
+  /// directamente, en vez de abrir el buscador para cambiarlo por otro.
+  bool _esEditableLibremente(_AlimentoEdit a) =>
+      a.alimentoId == 'desconocido' ||
+      _personalizados.any((p) => p['id'] == a.alimentoId);
+
+  Future<void> _editarAlimentoLibre(int indice) async {
+    final tema = FlutterFlowTheme.of(context);
+    final alimento = _alimentos[indice];
+    final controladorNombre = TextEditingController(text: alimento.nombre);
+    final controladorKcal =
+        TextEditingController(text: _numeroCorto(alimento.kcal100));
+    final controladorProteina =
+        TextEditingController(text: _numeroCorto(alimento.proteina100));
+    final controladorCarbos =
+        TextEditingController(text: _numeroCorto(alimento.carbos100));
+    final controladorGrasa =
+        TextEditingController(text: _numeroCorto(alimento.grasa100));
+
+    final guardar = await showModalBottomSheet<bool>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: tema.secondaryBackground,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      builder: (ctx) => Padding(
+        padding: EdgeInsets.only(
+          left: 20,
+          right: 20,
+          top: 16,
+          bottom: MediaQuery.of(ctx).viewInsets.bottom + 16,
+        ),
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Text('Editar alimento',
+                  style: tema.titleMedium.copyWith(
+                      color: tema.primaryText, fontWeight: FontWeight.w700)),
+              const SizedBox(height: 6),
+              Text('Valores por 100 g/100 ml.',
+                  style: tema.bodySmall.copyWith(color: tema.secondaryText)),
+              if (alimento.micro.values.any((v) => v > 0)) ...[
+                const SizedBox(height: 6),
+                Text(
+                  'Las vitaminas y minerales de este alimento no se editan aquí; se quedan como están.',
+                  style: tema.bodySmall.copyWith(
+                      color: tema.secondaryText, fontStyle: FontStyle.italic),
+                ),
+              ],
+              const SizedBox(height: 14),
+              TextField(
+                controller: controladorNombre,
+                style: TextStyle(color: tema.primaryText),
+                decoration: _decoracionCampoProducto('Nombre'),
+              ),
+              const SizedBox(height: 10),
+              Row(children: [
+                Expanded(
+                  child: TextField(
+                    controller: controladorKcal,
+                    keyboardType:
+                        const TextInputType.numberWithOptions(decimal: true),
+                    style: TextStyle(color: tema.primaryText),
+                    decoration: _decoracionCampoProducto('kcal/100'),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: TextField(
+                    controller: controladorProteina,
+                    keyboardType:
+                        const TextInputType.numberWithOptions(decimal: true),
+                    style: TextStyle(color: tema.primaryText),
+                    decoration: _decoracionCampoProducto('Proteína g'),
+                  ),
+                ),
+              ]),
+              const SizedBox(height: 8),
+              Row(children: [
+                Expanded(
+                  child: TextField(
+                    controller: controladorCarbos,
+                    keyboardType:
+                        const TextInputType.numberWithOptions(decimal: true),
+                    style: TextStyle(color: tema.primaryText),
+                    decoration: _decoracionCampoProducto('Carbos g'),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: TextField(
+                    controller: controladorGrasa,
+                    keyboardType:
+                        const TextInputType.numberWithOptions(decimal: true),
+                    style: TextStyle(color: tema.primaryText),
+                    decoration: _decoracionCampoProducto('Grasa g'),
+                  ),
+                ),
+              ]),
+              const SizedBox(height: 16),
+              _botonPrincipal('Guardar cambios', () {
+                if (controladorNombre.text.trim().isEmpty) return;
+                Navigator.of(ctx).pop(true);
+              }),
+            ],
+          ),
+        ),
+      ),
+    );
+
+    if (guardar != true || !mounted) return;
+    final kcal100 =
+        double.tryParse(controladorKcal.text.replaceAll(',', '.')) ??
+            alimento.kcal100;
+    final proteina100 =
+        double.tryParse(controladorProteina.text.replaceAll(',', '.')) ??
+            alimento.proteina100;
+    final carbos100 =
+        double.tryParse(controladorCarbos.text.replaceAll(',', '.')) ??
+            alimento.carbos100;
+    final grasa100 =
+        double.tryParse(controladorGrasa.text.replaceAll(',', '.')) ??
+            alimento.grasa100;
     setState(() {
-      final borrado = _alimentos.removeAt(indice);
-      // Si era el último alimento que quedaba de su bloque de texto, ese
-      // trozo de la transcripción ya no corresponde a nada guardado — se
-      // vacía (no se quita de la lista, para no descuadrar los índices que
-      // ya tienen asignados el resto de alimentos).
-      if (borrado.bloqueIndice >= 0 &&
-          borrado.bloqueIndice < _bloques.length &&
-          !_alimentos.any((a) => a.bloqueIndice == borrado.bloqueIndice)) {
-        _bloques[borrado.bloqueIndice] = '';
-        _reconstruirTranscripcion();
-      }
+      alimento.nombre = controladorNombre.text.trim();
+      alimento.kcal100 = kcal100;
+      alimento.proteina100 = proteina100;
+      alimento.carbos100 = carbos100;
+      alimento.grasa100 = grasa100;
+      alimento.kcal = round1(kcal100 * alimento.gramos / 100);
+      alimento.proteinaG = round1(proteina100 * alimento.gramos / 100);
+      alimento.carbosG = round1(carbos100 * alimento.gramos / 100);
+      alimento.grasaG = round1(grasa100 * alimento.gramos / 100);
     });
   }
 
-  void _agregarAlimentoVacio() {
+  void _borrarAlimento(int indice) {
+    setState(() {
+      _alimentos.removeAt(indice);
+      // Al quitarlo de la lista, su fragmento de texto deja de contar en
+      // la transcripción reconstruida — sin importar si compartía frase
+      // con otros alimentos que sí se quedan.
+      _reconstruirTranscripcion();
+    });
+  }
+
+  Future<void> _agregarAlimentoVacio() async {
+    final tipo = await _elegirGrupoDestino();
+    if (tipo == null || !mounted) return;
     setState(() => _alimentos.add(_AlimentoEdit(
         alimentoId: 'desconocido',
         nombre: 'Nuevo alimento',
         gramos: 100,
-        tipo: _detectarTipoComida(_referenciaParaTipo()))));
+        tipo: tipo)));
   }
 
   /// Edita el nombre y los macros de un producto ya guardado (foto de
   /// etiqueta). `refrescarLista` es el setState del propio buscador, para
   /// que el cambio se vea al momento sin tener que cerrarlo y reabrirlo.
+  /// Borra un producto guardado (foto o manual) de tu base de datos del
+  /// todo — no solo de esta comida, de donde lo puedas volver a usar en
+  /// el futuro. Pide confirmación porque no se puede deshacer.
+  Future<void> _borrarProductoPersonalizado(String id, String nombre,
+      void Function(void Function()) refrescarLista) async {
+    final tema = FlutterFlowTheme.of(context);
+    final confirmar = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: tema.secondaryBackground,
+        title: Text('¿Borrar "$nombre"?',
+            style: TextStyle(color: tema.primaryText)),
+        content: Text(
+          'Se borra de tu lista de productos guardados. No podrás volver a usarlo por su nombre — '
+          'si lo dictas otra vez, se tratará como un alimento nuevo. Esto no afecta a las comidas '
+          'donde ya lo hayas registrado.',
+          style: TextStyle(color: tema.secondaryText),
+        ),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.of(ctx).pop(false),
+              child: const Text('Cancelar')),
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: Text('Borrar', style: TextStyle(color: tema.error)),
+          ),
+        ],
+      ),
+    );
+    if (confirmar != true) return;
+
+    final uid = FirebaseAuth.instance.currentUser?.uid;
+    if (uid != null) {
+      try {
+        await FirebaseFirestore.instance
+            .collection('users')
+            .doc(uid)
+            .collection('alimentosPersonalizados')
+            .doc(id)
+            .delete();
+      } catch (_) {
+        _mostrarMensaje(
+            'No se ha podido borrar el producto. Inténtalo de nuevo.');
+        return;
+      }
+    }
+    if (mounted) {
+      setState(() => _personalizados.removeWhere((p) => p['id'] == id));
+    }
+    refrescarLista(() {});
+  }
+
   Future<void> _editarProductoPersonalizado(
       String id, void Function(void Function()) refrescarLista) async {
     final tema = FlutterFlowTheme.of(context);
@@ -1777,6 +2029,20 @@ class _RegistroComidaState extends State<RegistroComida> {
                                             icon: Icon(Icons.edit_rounded,
                                                 size: 17,
                                                 color: tema.secondaryText),
+                                            constraints: const BoxConstraints(
+                                                minWidth: 32, minHeight: 32),
+                                            padding: EdgeInsets.zero,
+                                          ),
+                                          IconButton(
+                                            onPressed: () =>
+                                                _borrarProductoPersonalizado(
+                                                    item.id,
+                                                    item.nombre,
+                                                    setSheet),
+                                            icon: Icon(
+                                                Icons.delete_outline_rounded,
+                                                size: 17,
+                                                color: tema.error),
                                             constraints: const BoxConstraints(
                                                 minWidth: 32, minHeight: 32),
                                             padding: EdgeInsets.zero,
@@ -2204,7 +2470,9 @@ class _RegistroComidaState extends State<RegistroComida> {
             children: [
               Expanded(
                 child: GestureDetector(
-                  onTap: () => _elegirAlimento(indice),
+                  onTap: () => _esEditableLibremente(alimento)
+                      ? _editarAlimentoLibre(indice)
+                      : _elegirAlimento(indice),
                   child: Row(
                     children: [
                       Expanded(
@@ -2564,7 +2832,7 @@ class _RegistroComidaState extends State<RegistroComida> {
                 if (_alimentos.isNotEmpty) _resumenTotales(),
                 ..._seccionesAgrupadas(),
                 TextButton.icon(
-                  onPressed: _vozDisponible ? _empezarEscucha : _dictarMasTexto,
+                  onPressed: _iniciarDictado,
                   icon: Icon(
                       _vozDisponible
                           ? Icons.mic_rounded
